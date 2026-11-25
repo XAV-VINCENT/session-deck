@@ -11,6 +11,9 @@ final class NotchModel: ObservableObject {
 
     @Published var mode: Mode = .collapsed
     @Published var notchSize = CGSize(width: 190, height: 32)
+    /// The deck is built while the pointer heads for the notch, so opening only has to animate, and dropped
+    /// again a few seconds after it closes, so a hidden deck costs nothing.
+    @Published var deckMounted = false
 
     static let wing: CGFloat = 40
     static let expandedSize = CGSize(width: 680, height: 620)
@@ -37,6 +40,16 @@ final class NotchModel: ObservableObject {
     }
 }
 
+/// Springs tuned to feel instant: the deck is fully open in about 0.3 s.
+enum NotchMotion {
+    static let open = Animation.spring(response: 0.3, dampingFraction: 0.8)
+    static let close = Animation.spring(response: 0.24, dampingFraction: 0.92)
+    static let peek = Animation.spring(response: 0.34, dampingFraction: 0.74)
+    /// Pointer on the notch this long opens the deck (filters out a cursor just passing through).
+    static let hoverDelay = 0.03
+    static let leaveDelay = 0.3
+}
+
 private final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -60,6 +73,8 @@ final class NotchController {
     private var collapseWork: DispatchWorkItem?
     private var monitors: [Any] = []
     private var pointerInside = false
+    private var lastPointer = NSPoint.zero
+    private var unmountWork: DispatchWorkItem?
     /// Opened with the shortcut: stays open until Escape, the shortcut again, a click outside or an open.
     private var openedByKeyboard = false
     /// Gets the keyboard back when the deck closes without opening anything.
@@ -85,6 +100,9 @@ final class NotchController {
         panel.isMovable = false
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
+        // The panel always has the open deck's size, so SwiftUI grows the shape from the top centre in one
+        // coordinate space. Where nothing is drawn (or the deck is closed) clicks go through to the app below.
+        panel.ignoresMouseEvents = true
 
         var wrapped = actions
         wrapped.open = { [weak self] session in self?.open(session) }
@@ -126,6 +144,7 @@ final class NotchController {
         }
         previousApp = NSWorkspace.shared.frontmostApplication
         openedByKeyboard = true
+        mountDeck(true)
         expand()
         panel.makeKeyAndOrderFront(nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.viewState.focusToken += 1 }
@@ -153,8 +172,34 @@ final class NotchController {
         return NSRect(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - size.height, width: size.width, height: size.height + 2)
     }
 
+    /// Where a pointer heading for the notch passes first: the top of the screen around the camera.
+    private var approachRect: NSRect {
+        guard let screen else { return .zero }
+        let width = NotchModel.expandedSize.width + 360
+        return NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - 240, width: width, height: 242)
+    }
+
+    private func mountDeck(_ near: Bool) {
+        if near || model.mode != .collapsed {
+            unmountWork?.cancel()
+            unmountWork = nil
+            if !model.deckMounted { model.deckMounted = true }
+        } else if model.deckMounted && unmountWork == nil {
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.model.mode == .collapsed else { return }
+                self.model.deckMounted = false
+                self.unmountWork = nil
+            }
+            unmountWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
+        }
+    }
+
     private func pointerMoved(to point: NSPoint) {
+        lastPointer = point
+        mountDeck(approachRect.contains(point))
         let inside = hotRect.contains(point)
+        panel.ignoresMouseEvents = !(inside && model.mode != .collapsed)
         guard inside != pointerInside else { return }
         pointerInside = inside
         hoverChanged(inside)
@@ -162,8 +207,7 @@ final class NotchController {
 
     func peek(_ session: Session) {
         guard model.mode == .collapsed else { return }
-        setFrame(for: .peek(session.id))
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) { model.mode = .peek(session.id) }
+        withAnimation(NotchMotion.peek) { model.mode = .peek(session.id) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
             guard let self, self.model.mode == .peek(session.id) else { return }
             self.collapse()
@@ -177,33 +221,31 @@ final class NotchController {
             guard model.mode != .expanded else { return }
             let work = DispatchWorkItem { [weak self] in self?.expand() }
             hoverWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + NotchMotion.hoverDelay, execute: work)
         } else if model.mode != .collapsed && !openedByKeyboard {
             let work = DispatchWorkItem { [weak self] in self?.collapse() }
             collapseWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + NotchMotion.leaveDelay, execute: work)
         }
     }
 
     private func expand() {
-        setFrame(for: .expanded)
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) { model.mode = .expanded }
+        withAnimation(NotchMotion.open) { model.mode = .expanded }
+        panel.ignoresMouseEvents = !hotRect.contains(lastPointer) && !openedByKeyboard
     }
 
     func collapse(restoreFocus: Bool = false) {
         collapseWork?.cancel()
+        defer { mountDeck(approachRect.contains(lastPointer)) }
         openedByKeyboard = false
         viewState.selectedId = nil
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.9)) { model.mode = .collapsed }
+        withAnimation(NotchMotion.close) { model.mode = .collapsed }
+        panel.ignoresMouseEvents = true
         if panel.isKeyWindow {
             panel.resignKey()
             if restoreFocus { previousApp?.activate() }
         }
         previousApp = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            guard let self, self.model.mode == .collapsed else { return }
-            self.setFrame(for: .collapsed)
-        }
     }
 
     private var screen: NSScreen? {
@@ -219,19 +261,18 @@ final class NotchController {
         } else {
             model.notchSize = CGSize(width: 150, height: NSStatusBar.system.thickness)
         }
-        setFrame(for: model.mode)
+        placePanel()
     }
 
-    private func setFrame(for mode: NotchModel.Mode) {
+    /// The largest the shape gets (the open deck) plus room for its shadow, centred under the camera.
+    private static var panelSize: CGSize {
+        CGSize(width: NotchModel.expandedSize.width + margin * 2, height: NotchModel.expandedSize.height + margin)
+    }
+
+    private func placePanel() {
         guard let screen else { return }
-        let probe = NotchModel()
-        probe.notchSize = model.notchSize
-        probe.mode = mode
-        let margin = mode == .collapsed ? 0 : Self.margin
-        let width = max(probe.size.width, model.size.width) + margin * 2
-        let height = max(probe.size.height, model.size.height) + margin
-        let frame = NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
-        panel.setFrame(frame, display: true)
+        let size = Self.panelSize
+        panel.setFrame(NSRect(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - size.height, width: size.width, height: size.height), display: true)
     }
 }
 
@@ -260,23 +301,36 @@ struct NotchRootView: View {
         .environment(\.colorScheme, .dark)
     }
 
-    @ViewBuilder private var content: some View {
-        switch model.mode {
-        case .collapsed:
-            wings
-                .transition(.opacity)
-        case .peek(let id):
-            VStack(spacing: 0) {
-                wings
-                if let session = store.snapshot.sessions.first(where: { $0.id == id }) {
-                    PeekCard(session: session, instance: store.snapshot.instance(session.instanceId), onOpen: actions.open)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
+    /// The deck stays built while hidden, so opening draws its first frame at once; the shape reveals it from the
+    /// top centre as it grows.
+    private var content: some View {
+        let open = model.mode == .expanded
+        return ZStack(alignment: .top) {
+            if model.deckMounted || open {
+                DashboardView(store: store, viewState: viewState, actions: actions, notchSize: model.notchSize)
+                    .frame(width: NotchModel.expandedSize.width, height: NotchModel.expandedSize.height)
+                    .opacity(open ? 1 : 0)
+                    .scaleEffect(open ? 1 : 0.97, anchor: .top)
+                    .animation(open ? .easeOut(duration: 0.16) : .easeIn(duration: 0.1), value: open)
+                    .allowsHitTesting(open)
             }
-        case .expanded:
-            DashboardView(store: store, viewState: viewState, actions: actions, notchSize: model.notchSize)
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+            switch model.mode {
+            case .collapsed:
+                wings
+                    .transition(.opacity)
+            case .peek(let id):
+                VStack(spacing: 0) {
+                    wings
+                    if let session = store.snapshot.sessions.first(where: { $0.id == id }) {
+                        PeekCard(session: session, instance: store.snapshot.instance(session.instanceId), onOpen: actions.open)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+                }
+            case .expanded:
+                EmptyView()
+            }
         }
+        .frame(width: model.size.width, height: model.size.height, alignment: .top)
     }
 
     private var wings: some View {
@@ -342,15 +396,39 @@ extension NotchController {
         let top = NSPoint(x: screen.frame.midX, y: screen.frame.maxY - 3)
         let insideDeck = NSPoint(x: screen.frame.midX + 200, y: screen.frame.maxY - 400)
         let away = NSPoint(x: screen.frame.minX + 40, y: screen.frame.midY)
+        let approaching = NSPoint(x: screen.frame.midX - 120, y: screen.frame.maxY - 160)
         var failures = 0
         func expect(_ label: String, _ ok: Bool, _ info: String = "") {
             if !ok { failures += 1 }
             print("\(ok ? "PASS" : "FAIL") \(label)\(info.isEmpty ? "" : ": \(info)")")
         }
-        func frame(_ label: String, width: CGFloat) {
+        /// The panel never moves or resizes; the mode and whether clicks reach it change.
+        func frame(_ label: String, open: Bool) {
             let frame = controller.panel.frame
-            let ok = abs(frame.width - width) < 1 && abs(frame.maxY - screen.frame.maxY) < 1 && abs(frame.midX - screen.frame.midX) < 1
-            expect(label, ok, "mode=\(controller.model.mode) width \(frame.width), expected \(width)")
+            let placed = abs(frame.width - panelSize.width) < 1 && abs(frame.maxY - screen.frame.maxY) < 1 && abs(frame.midX - screen.frame.midX) < 1
+            let mode = open ? controller.model.mode == .expanded : controller.model.mode == .collapsed
+            let clicks = controller.panel.ignoresMouseEvents == !open
+            expect(label, placed && mode && clicks, "mode=\(controller.model.mode) clicks \(controller.panel.ignoresMouseEvents ? "pass through" : "reach the deck")")
+        }
+        /// Captures the panel mid-animation: the black shape must stay centred under the camera while it grows.
+        func checkCentred(after delays: [Double]) {
+            for (index, delay) in delays.enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    guard let view = controller.panel.contentView,
+                          let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    var minX = Int.max, maxX = -1
+                    for x in 0..<rep.pixelsWide {
+                        guard let color = rep.colorAt(x: x, y: 2), color.alphaComponent > 0.9, color.brightnessComponent < 0.1 else { continue }
+                        minX = min(minX, x)
+                        maxX = max(maxX, x)
+                    }
+                    let scale = CGFloat(rep.pixelsWide) / view.bounds.width
+                    let centre = CGFloat(minX + maxX) / 2 / CGFloat(rep.pixelsWide)
+                    expect("growing deck \(index + 1) is centred", maxX > minX && abs(centre - 0.5) < 0.01,
+                           String(format: "%.0f pt wide at %.0f ms, centre at %.1f%% of the panel", CGFloat(maxX - minX) / scale, delay * 1000, centre * 100))
+                }
+            }
         }
         func key(_ code: Int) {
             let event = NSEvent.keyEvent(
@@ -381,22 +459,39 @@ extension NotchController {
         expect("live spinner draws and spins", inked(spinner) > 50 && spinner.isSpinning, "\(inked(spinner)) px")
         expect("live pulse draws and pulses", inked(pulse) > 50 && pulse.isPulsing, "\(inked(pulse)) px")
 
-        let collapsedWidth = controller.model.collapsedSize.width
-        let expandedWidth = NotchModel.expandedSize.width + margin * 2
         let firstRow = DeckLayout(store: store, viewState: viewState).rows.first
         let steps: [(Double, () -> Void)] = [
-            (0.3, { frame("collapsed at start", width: collapsedWidth); controller.pointerMoved(to: top) }),
-            (0.8, { frame("pointer on the notch expands", width: expandedWidth); controller.pointerMoved(to: insideDeck) }),
-            (0.8, { frame("pointer inside the deck keeps it open", width: expandedWidth); controller.pointerMoved(to: away) }),
-            (1.2, { frame("pointer away collapses", width: collapsedWidth); controller.toggleFromKeyboard() }),
+            (0.3, {
+                frame("collapsed at start", open: false)
+                expect("no deck built while the pointer is away", !controller.model.deckMounted)
+                controller.pointerMoved(to: approaching)
+            }),
+            (0.3, {
+                expect("pointer heading for the notch builds the deck", controller.model.deckMounted)
+                FrameProbe.start()
+                controller.pointerMoved(to: top)
+            }),
             (0.8, {
-                frame("shortcut expands", width: expandedWidth)
+                frame("pointer on the notch expands", open: true)
+                let report = FrameProbe.stop()
+                expect("opening starts fast", report.firstFrame < 0.1, String(format: "first frame after %.0f ms", report.firstFrame * 1000))
+                print(String(format: "INFO opening animation: %d frames in %.0f ms, %.0f fps (screen max %d Hz)",
+                             report.frames, report.duration * 1000, report.fps, screen.maximumFramesPerSecond))
+                controller.pointerMoved(to: insideDeck)
+            }),
+            (0.8, { frame("pointer inside the deck keeps it open", open: true); controller.pointerMoved(to: away) }),
+            (1.2, { frame("pointer away collapses", open: false)
+                controller.toggleFromKeyboard()
+                checkCentred(after: [0.05, 0.1])
+            }),
+            (0.8, {
+                frame("shortcut expands", open: true)
                 expect("shortcut makes the deck the key window", controller.panel.isKeyWindow)
                 controller.pointerMoved(to: top)
                 controller.pointerMoved(to: away)
             }),
             (1.0, {
-                frame("deck opened by shortcut ignores the pointer leaving", width: expandedWidth)
+                expect("deck opened by shortcut ignores the pointer leaving", controller.model.mode == .expanded)
                 key(kVK_DownArrow)
                 expect("down arrow selects the first row", viewState.selectedId != nil && viewState.selectedId == firstRow?.id, viewState.selectedId ?? "nil")
                 key(kVK_Tab)
@@ -407,12 +502,15 @@ extension NotchController {
                 expect("return opens the selected session", opened?.id == firstRow?.id, opened?.title ?? "nothing opened")
             }),
             (1.0, {
-                frame("opening collapses", width: collapsedWidth)
+                frame("opening collapses", open: false)
                 controller.toggleFromKeyboard()
             }),
-            (0.8, { key(kVK_Escape) }),
+            (0.8, {
+                viewState.query = "" // the focused search field catches whatever is typed on this Mac meanwhile
+                key(kVK_Escape)
+            }),
             (1.0, {
-                frame("escape collapses", width: collapsedWidth)
+                frame("escape collapses", open: false)
                 print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
                 exit(failures == 0 ? 0 : 1)
             }),

@@ -54,6 +54,8 @@ Point at the notch, or press <kbd>⌥</kbd><kbd>⌘</kbd><kbd>K</kbd> from any a
 - **Each row** shows the status, the title, the session's own last update, the project, its pull requests
   (GitHub colors, click to open), the branch and how long ago it moved.
 - **Click a row** and the conversation opens in the Claude window that owns it, even with four profiles open.
+- **Instant**: the deck stays built in the background, so it starts opening about 30 ms after the pointer reaches
+  the notch, grows from the camera outwards, and animates at your display's full rate (120 Hz on ProMotion).
 
 ### Terminal sessions
 

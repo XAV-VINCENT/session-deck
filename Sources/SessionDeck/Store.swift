@@ -173,7 +173,7 @@ final class Store: ObservableObject {
 
         for (index, name) in names.enumerated() {
             let dir = support.appendingPathComponent(name)
-            let account = (readJSON(dir.appendingPathComponent("config.json"))?["lastKnownAccountUuid"]) as? String
+            let account = (cachedJSON(dir.appendingPathComponent("config.json"))?["lastKnownAccountUuid"]) as? String
             let custom = config.instances[name]
             let instance = Instance(
                 id: name,
@@ -315,8 +315,19 @@ final class Store: ObservableObject {
         return result
     }
 
+    /// Small files read on every scan (account, sidebar, archive list), parsed again only when they change.
+    private var jsonCache: [String: (modified: Date, json: [String: Any]?)] = [:]
+
+    private func cachedJSON(_ url: URL) -> [String: Any]? {
+        let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+        if let hit = jsonCache[url.path], hit.modified == modified { return hit.json }
+        let json = readJSON(url)
+        jsonCache[url.path] = (modified, json)
+        return json
+    }
+
     private func readArchivedIds(_ orgDir: URL) -> Set<String> {
-        let ids = readJSON(orgDir.appendingPathComponent("archived-sessions.idx"))?["archived"] as? [String]
+        let ids = cachedJSON(orgDir.appendingPathComponent("archived-sessions.idx"))?["archived"] as? [String]
         return Set(ids ?? [])
     }
 
@@ -331,7 +342,7 @@ final class Store: ObservableObject {
 
     /// The user's own sidebar groups ("Current", "Later", ...) per `account/org`.
     private func readSidebar(_ url: URL) -> [String: GroupScope] {
-        guard let prefs = (readJSON(url)?["preferences"] as? [String: Any])?["epitaxyPrefs"] as? [String: Any],
+        guard let prefs = (cachedJSON(url)?["preferences"] as? [String: Any])?["epitaxyPrefs"] as? [String: Any],
               let scopes = prefs["dframe-group-scopes"] as? [String: Any] else { return [:] }
         let sections = prefs["dframe-code-sections"] as? [String: Any] ?? [:]
         var result: [String: GroupScope] = [:]

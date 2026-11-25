@@ -104,7 +104,7 @@ private func openFromCommandLine(sessionId: String) -> Int32 {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let store: Store
     private let viewState: DeckViewState
     private var statusItem: NSStatusItem!
@@ -113,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKey: HotKey?
     private var keyMonitor: Any?
     private var subscriptions = Set<AnyCancellable>()
+    private var makePopoverContent: (() -> NSViewController)?
 
     init(demo: Bool) {
         store = Store(demo: demo)
@@ -131,11 +132,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         popover.behavior = .transient
         popover.appearance = NSAppearance(named: .darkAqua)
-        popover.contentViewController = NSHostingController(
-            rootView: DashboardView(store: store, viewState: viewState, actions: actions)
+        popover.delegate = self
+        // The popover's deck is built when it opens and dropped when it closes, so it costs nothing while hidden.
+        makePopoverContent = { [store, viewState] in
+            NSHostingController(rootView: DashboardView(store: store, viewState: viewState, actions: actions)
                 .frame(width: 640, height: 660)
-                .background(Color.black)
-        )
+                .background(Color.black))
+        }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = MenuBarIcon.image
@@ -191,10 +194,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             popover.performClose(nil)
         } else {
             NSApp.activate(ignoringOtherApps: true)
+            popover.contentViewController = makePopoverContent?()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.viewState.focusToken += 1 }
         }
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        popover.contentViewController = nil
     }
 
     /// Runs after the change lands (`receive(on:)` defers past `objectWillChange`).

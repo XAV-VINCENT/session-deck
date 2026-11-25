@@ -376,6 +376,38 @@ struct DeckWallpaper: View {
     }
 }
 
+/// Counts the frames SwiftUI draws while the notch animates (its shape is redrawn once per frame).
+enum FrameProbe {
+    private static let lock = NSLock()
+    private static var stamps: [CFTimeInterval] = []
+    private static var startedAt: CFTimeInterval?
+
+    static func start() {
+        lock.lock(); defer { lock.unlock() }
+        stamps = []
+        startedAt = CACurrentMediaTime()
+    }
+
+    static func mark() {
+        lock.lock(); defer { lock.unlock() }
+        guard startedAt != nil else { return }
+        stamps.append(CACurrentMediaTime())
+    }
+
+    /// Time to the first frame, then frames per second over the animation.
+    static func stop() -> (firstFrame: Double, frames: Int, duration: Double, fps: Double) {
+        lock.lock(); defer { lock.unlock() }
+        let start = startedAt ?? 0
+        startedAt = nil
+        var frames: [CFTimeInterval] = []
+        for stamp in stamps.sorted() where frames.last.map({ stamp - $0 > 0.003 }) ?? true {
+            frames.append(stamp)
+        }
+        guard let first = frames.first, let last = frames.last, frames.count > 1 else { return (1, frames.count, 0, 0) }
+        return (first - start, frames.count, last - first, Double(frames.count - 1) / (last - first))
+    }
+}
+
 /// Flat top flush with the screen edge, rounded bottom corners.
 struct NotchShape: Shape {
     var radius: CGFloat
@@ -386,6 +418,7 @@ struct NotchShape: Shape {
     }
 
     func path(in rect: CGRect) -> Path {
+        FrameProbe.mark()
         let r = min(radius, rect.height / 2, rect.width / 2)
         var path = Path()
         path.move(to: CGPoint(x: rect.minX, y: rect.minY))
