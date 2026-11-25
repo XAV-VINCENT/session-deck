@@ -359,6 +359,28 @@ extension NotchController {
             )!
             _ = controller.handleKey(event)
         }
+        // The live spinner and pulse are Core Animation layers: check they draw and keep animating.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 80, height: 40), styleMask: [.borderless], backing: .buffered, defer: false)
+        let spinner = SpinnerLayerView(frame: NSRect(x: 0, y: 0, width: 40, height: 40))
+        let pulse = PulseLayerView(frame: NSRect(x: 40, y: 0, width: 40, height: 40))
+        spinner.configure(color: .systemBlue, lineWidth: 4)
+        pulse.configure(color: .systemOrange, size: 16)
+        window.contentView?.addSubview(spinner)
+        window.contentView?.addSubview(pulse)
+        for view in [spinner, pulse] as [NSView] {
+            view.layoutSubtreeIfNeeded()
+            view.layout()
+        }
+        func inked(_ view: NSView) -> Int {
+            let context = CGContext(data: nil, width: 40, height: 40, bitsPerComponent: 8, bytesPerRow: 160,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            view.layer?.render(in: context)
+            let pixels = context.data!.assumingMemoryBound(to: UInt8.self)
+            return (0..<1600).filter { pixels[$0 * 4 + 3] > 0 }.count
+        }
+        expect("live spinner draws and spins", inked(spinner) > 50 && spinner.isSpinning, "\(inked(spinner)) px")
+        expect("live pulse draws and pulses", inked(pulse) > 50 && pulse.isPulsing, "\(inked(pulse)) px")
+
         let collapsedWidth = controller.model.collapsedSize.width
         let expandedWidth = NotchModel.expandedSize.width + margin * 2
         let firstRow = DeckLayout(store: store, viewState: viewState).rows.first

@@ -83,6 +83,8 @@ struct DeckSection: Identifiable {
     let instance: Instance
     let buckets: [DeckBucket]
     let recentCount: Int
+    /// Terminal sessions whose `claude` process is still running.
+    let openCount: Int
     let olderHidden: Int
     let counts: [SessionState: Int]
     let isCollapsed: Bool
@@ -112,6 +114,7 @@ struct DeckLayout {
                 instance: instance,
                 buckets: Self.buckets(visible, titles: titles),
                 recentCount: mine.count,
+                openCount: mine.filter { $0.cli?.isOpen == true }.count,
                 olderHidden: store.showOlder ? 0 : store.olderCount(of: instance.id),
                 counts: counts,
                 isCollapsed: query.isEmpty && viewState.collapsed.contains(instance.id)
@@ -265,13 +268,19 @@ struct DashboardView: View {
             HStack(spacing: 5) {
                 Circle().fill(SessionState.done.color).frame(width: 6, height: 6)
                     .shadow(color: SessionState.done.color, radius: 3)
-                Text(verbatim: "Live · \(store.snapshot.instances.count) profiles")
+                Text(verbatim: liveLabel)
             }
         }
         .font(.system(size: 10.5, weight: .medium))
         .foregroundStyle(Theme.text3)
         .padding(.horizontal, 14)
         .frame(height: 32)
+    }
+
+    private var liveLabel: String {
+        let profiles = store.snapshot.instances.filter { !$0.isTerminal }.count
+        let terminal = store.snapshot.instances.contains { $0.isTerminal } ? " + terminal" : ""
+        return "Live · \(profiles) profile\(profiles == 1 ? "" : "s")\(terminal)"
     }
 
     private func hint(_ keys: [String], _ label: String) -> some View {
@@ -505,8 +514,13 @@ private struct SectionCard: View {
                     .help("\(count) \(state.label.lowercased())")
                 }
             }
-            IconButton(symbol: instance.isRunning ? "macwindow" : "play.fill", help: instance.isRunning ? "Show this Claude window" : "Start this Claude profile") {
-                actions.bringToFront(instance)
+            if !instance.isTerminal || instance.isRunning {
+                IconButton(
+                    symbol: instance.isRunning ? "macwindow" : "play.fill",
+                    help: instance.isTerminal ? "Show the terminal" : instance.isRunning ? "Show this Claude window" : "Start this Claude profile"
+                ) {
+                    actions.bringToFront(instance)
+                }
             }
             Image(systemName: "chevron.down")
                 .font(.system(size: 10, weight: .bold))
@@ -522,6 +536,7 @@ private struct SectionCard: View {
 
     private var subtitle: String {
         let sessions = "\(section.recentCount) recent session\(section.recentCount == 1 ? "" : "s")"
+        if instance.isTerminal { return "Claude Code CLI · \(section.openCount) open · \(sessions)" }
         return instance.isRunning ? sessions : "Not running · \(sessions)"
     }
 }
@@ -626,15 +641,16 @@ struct SessionRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { onOpen(session) }
-        .help("Open in Claude")
+        .help(session.cli == nil ? "Open in Claude" : session.cli?.isOpen == true ? "Show its terminal" : "Resume in a terminal")
         .contextMenu { contextMenu }
     }
 
     @ViewBuilder private var trailing: some View {
         if hovering || selected {
             HStack(spacing: 3) {
-                Text("Open")
-                Image(systemName: "arrow.up.right").font(.system(size: 8.5, weight: .bold))
+                Text(session.cli?.isOpen == false ? "Resume" : "Open")
+                Image(systemName: session.cli?.isOpen == false ? "arrow.counterclockwise" : "arrow.up.right")
+                    .font(.system(size: 8.5, weight: .bold))
             }
             .font(.system(size: 10.5, weight: .semibold))
             .padding(.horizontal, 7)
@@ -681,7 +697,7 @@ struct SessionRow: View {
     }
 
     @ViewBuilder private var contextMenu: some View {
-        Button("Open in Claude") { onOpen(session) }
+        Button(session.cli == nil ? "Open in Claude" : session.cli?.isOpen == true ? "Show its terminal" : "Resume in a terminal") { onOpen(session) }
         ForEach(session.pullRequests.prefix(8), id: \.self) { pr in
             if let url = pr.url {
                 Button("Open PR \(pr.repo.split(separator: "/").last ?? "")#\(pr.number) (\(pr.state.lowercased()))" as String) {
@@ -693,9 +709,9 @@ struct SessionRow: View {
         Button("Show folder in Finder") {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: session.cwd)])
         }
-        Button("Copy link") {
+        Button(session.cli == nil ? "Copy link" : "Copy resume command") {
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(session.deepLink.absoluteString, forType: .string)
+            NSPasteboard.general.setString(session.cli.map { "cd '\($0.cwd)' && \($0.resumeCommand)" } ?? session.deepLink.absoluteString, forType: .string)
         }
     }
 }

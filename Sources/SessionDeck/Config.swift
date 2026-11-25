@@ -22,6 +22,8 @@ struct DeckConfig: Decodable {
     var recentDays: Int?
     /// Opens the deck from anywhere; `"none"` turns it off.
     var hotkey: String?
+    /// Where closed terminal sessions resume: `"warp"`, `"iterm"` or `"terminal"` (default: the terminal they ran in).
+    var terminal: String?
 
     static var fileURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

@@ -1,3 +1,5 @@
+import AppKit
+import QuartzCore
 import SwiftUI
 
 /// Dynamic Island look: pure black, white text at a few fixed opacities, saturated status colors.
@@ -74,14 +76,16 @@ struct StatusBadge: View {
     }
 }
 
+/// A spinning arc. Live, Core Animation turns it in the render server (no work in this process);
+/// with a `deckClock` (recorded frames) the angle comes from that clock.
 struct GradientSpinner: View {
     let color: Color
     var lineWidth: CGFloat = 2
     @Environment(\.deckClock) private var clock
 
     var body: some View {
-        TimelineView(.animation) { context in
-            let turn = (clock ?? context.date).timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.9) / 0.9
+        if let clock {
+            let turn = clock.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.9) / 0.9
             ZStack {
                 Circle().stroke(color.opacity(0.16), lineWidth: lineWidth)
                 Circle()
@@ -93,18 +97,21 @@ struct GradientSpinner: View {
                     .rotationEffect(.degrees(turn * 360))
             }
             .padding(lineWidth / 2)
+        } else {
+            LayerSpinner(color: NSColor(color), lineWidth: lineWidth)
         }
     }
 }
 
+/// A dot with a halo that grows and fades, on the render server like `GradientSpinner`.
 struct PulsingDot: View {
     let color: Color
     var size: CGFloat = 8
     @Environment(\.deckClock) private var clock
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
-            let phase = (clock ?? context.date).timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.8) / 1.8
+        if let clock {
+            let phase = clock.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.8) / 1.8
             ZStack {
                 Circle()
                     .fill(color.opacity(0.5 * (1 - phase)))
@@ -114,7 +121,147 @@ struct PulsingDot: View {
                     .frame(width: size, height: size)
                     .shadow(color: color.opacity(0.9), radius: size * 0.4)
             }
+        } else {
+            LayerPulse(color: NSColor(color), size: size)
         }
+    }
+}
+
+private struct LayerSpinner: NSViewRepresentable {
+    let color: NSColor
+    let lineWidth: CGFloat
+
+    func makeNSView(context: Context) -> SpinnerLayerView { SpinnerLayerView() }
+    func updateNSView(_ view: SpinnerLayerView, context: Context) { view.configure(color: color, lineWidth: lineWidth) }
+}
+
+final class SpinnerLayerView: NSView {
+    private let track = CAShapeLayer()
+    private let arc = CAShapeLayer()
+    private var color = NSColor.white
+    private var lineWidth: CGFloat = 2
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        for shape in [track, arc] {
+            shape.fillColor = nil
+            shape.lineCap = .round
+            layer?.addSublayer(shape)
+        }
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func configure(color: NSColor, lineWidth: CGFloat) {
+        self.color = color
+        self.lineWidth = lineWidth
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let path = CGPath(ellipseIn: bounds.insetBy(dx: lineWidth / 2, dy: lineWidth / 2), transform: nil)
+        for shape in [track, arc] {
+            shape.frame = bounds
+            shape.path = path
+            shape.lineWidth = lineWidth
+        }
+        track.strokeColor = color.withAlphaComponent(0.16).cgColor
+        arc.strokeColor = color.cgColor
+        arc.strokeEnd = 0.72
+        CATransaction.commit()
+        spin()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        spin()
+    }
+
+    var isSpinning: Bool { arc.animation(forKey: "spin") != nil }
+
+    private func spin() {
+        guard arc.animation(forKey: "spin") == nil else { return }
+        let animation = CABasicAnimation(keyPath: "transform.rotation.z")
+        animation.fromValue = 0
+        animation.toValue = -2 * Double.pi
+        animation.duration = 0.9
+        animation.repeatCount = .infinity
+        arc.add(animation, forKey: "spin")
+    }
+}
+
+private struct LayerPulse: NSViewRepresentable {
+    let color: NSColor
+    let size: CGFloat
+
+    func makeNSView(context: Context) -> PulseLayerView { PulseLayerView() }
+    func updateNSView(_ view: PulseLayerView, context: Context) { view.configure(color: color, size: size) }
+}
+
+final class PulseLayerView: NSView {
+    private let halo = CALayer()
+    private let dot = CALayer()
+    private var color = NSColor.white
+    private var size: CGFloat = 8
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.addSublayer(halo)
+        layer?.addSublayer(dot)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func configure(color: NSColor, size: CGFloat) {
+        self.color = color
+        self.size = size
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let frame = CGRect(x: bounds.midX - size / 2, y: bounds.midY - size / 2, width: size, height: size)
+        for circle in [halo, dot] {
+            circle.frame = frame
+            circle.cornerRadius = size / 2
+            circle.backgroundColor = color.cgColor
+        }
+        dot.shadowColor = color.cgColor
+        dot.shadowOpacity = 0.9
+        dot.shadowRadius = size * 0.4
+        dot.shadowOffset = .zero
+        halo.opacity = 0
+        CATransaction.commit()
+        pulse()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        pulse()
+    }
+
+    var isPulsing: Bool { halo.animation(forKey: "pulse") != nil }
+
+    private func pulse() {
+        guard halo.animation(forKey: "pulse") == nil else { return }
+        let grow = CABasicAnimation(keyPath: "transform.scale")
+        grow.fromValue = 1
+        grow.toValue = 2.4
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.5
+        fade.toValue = 0
+        let group = CAAnimationGroup()
+        group.animations = [grow, fade]
+        group.duration = 1.8
+        group.repeatCount = .infinity
+        halo.add(group, forKey: "pulse")
     }
 }
 
@@ -141,11 +288,17 @@ struct ProfileAvatar: View {
         ZStack(alignment: .bottomTrailing) {
             Circle()
                 .fill(LinearGradient(colors: [instance.color, instance.color.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .overlay(
-                    Text(verbatim: String(instance.label.prefix(1)).uppercased())
-                        .font(Theme.rounded(size * 0.5, .bold))
-                        .foregroundStyle(.black.opacity(0.75))
-                )
+                .overlay {
+                    if let symbol = instance.symbol {
+                        Image(systemName: symbol)
+                            .font(.system(size: size * 0.42, weight: .bold))
+                            .foregroundStyle(.black.opacity(0.75))
+                    } else {
+                        Text(verbatim: String(instance.label.prefix(1)).uppercased())
+                            .font(Theme.rounded(size * 0.5, .bold))
+                            .foregroundStyle(.black.opacity(0.75))
+                    }
+                }
                 .frame(width: size, height: size)
             Circle()
                 .fill(instance.isRunning ? SessionState.done.color : Color(white: 0.4))
@@ -153,7 +306,9 @@ struct ProfileAvatar: View {
                 .overlay(Circle().stroke(Color.black, lineWidth: 1.5))
                 .offset(x: 1, y: 1)
         }
-        .help(instance.isRunning ? "\(instance.label) is open" : "\(instance.label) is not running")
+        .help(instance.isTerminal
+            ? (instance.isRunning ? "A Claude Code session is open in a terminal" : "No terminal session open")
+            : (instance.isRunning ? "\(instance.label) is open" : "\(instance.label) is not running"))
     }
 }
 

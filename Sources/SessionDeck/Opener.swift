@@ -8,10 +8,18 @@ import CoreServices
 /// the right instance, which hands it to its own `claude://code/continue?session=` handler.
 enum Opener {
     static func open(_ session: Session, in instance: Instance) {
-        deliver(session.deepLink, to: instance)
+        if let cli = session.cli {
+            TerminalLauncher.open(cli)
+        } else {
+            deliver(session.deepLink, to: instance)
+        }
     }
 
     static func bringToFront(_ instance: Instance) {
+        if instance.isTerminal {
+            if let pid = instance.pid { TerminalLauncher.focus(pid) }
+            return
+        }
         if let pid = Store.runningInstancePids()[instance.id] {
             activate(pid)
         } else {
@@ -60,7 +68,7 @@ enum Opener {
         }
     }
 
-    private static func activate(_ pid: pid_t) {
+    static func activate(_ pid: pid_t) {
         guard let app = NSRunningApplication(processIdentifier: pid) else { return }
         NSApp.activate(ignoringOtherApps: true)
         NSApp.yieldActivation(to: app)

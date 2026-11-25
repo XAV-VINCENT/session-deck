@@ -4,10 +4,10 @@
 
 # Session Deck
 
-**Every Claude Code session, from every Claude profile, one notch away.**
+**Every Claude Code session, from every Claude profile and every terminal, one notch away.**
 
 A native macOS notch and menu bar app that shows what each of your Claude Code sessions is doing,
-across all your Claude Desktop profiles, and opens the right conversation in the right window in one click.
+across all your Claude Desktop profiles and your terminals, and takes you to the right one in one click.
 
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)
 ![Swift 5.9](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)
@@ -21,8 +21,9 @@ across all your Claude Desktop profiles, and opens the right conversation in the
 ## Why
 
 You run Claude Code in several Claude Desktop profiles: a work account, a personal one, a client's
-organization. Each window only knows its own sidebar, so "what was waiting on me again?" means clicking
-through every window. Session Deck reads them all and puts the answer around your notch.
+organization. On top of that, a few `claude` sessions live in terminal tabs. Each window only knows its own
+sidebar, so "what was waiting on me again?" means clicking through every window and tab. Session Deck reads
+them all and puts the answer around your notch.
 
 ## What you get
 
@@ -53,6 +54,21 @@ Point at the notch, or press <kbd>⌥</kbd><kbd>⌘</kbd><kbd>K</kbd> from any a
 - **Each row** shows the status, the title, the session's own last update, the project, its pull requests
   (GitHub colors, click to open), the branch and how long ago it moved.
 - **Click a row** and the conversation opens in the Claude window that owns it, even with four profiles open.
+
+### Terminal sessions
+
+<img src="docs/images/terminal.jpg" alt="The Terminal card lists Claude Code CLI sessions, open ones first" width="100%">
+
+Sessions you start with `claude` in a terminal (Warp, Terminal, iTerm2 or an editor's terminal) get their own
+**Terminal** card: the open ones first, then the ones closed in the last 30 days.
+
+- **Title** from Claude's own session title (or your `/rename`), **state** from its live status: running,
+  waiting for you (a permission prompt, a question), idle.
+- **Click an open one** and its terminal comes to the front. Terminal and iTerm2 also switch to the right tab;
+  Warp has no way to pick a tab from outside, so it just comes forward.
+- **Click a closed one** and it resumes with `claude --resume <id>` in its folder, in the terminal you use:
+  Warp (through a tab config Session Deck writes to `~/.warp/tab_configs/session_deck_resume.toml`, which also
+  shows in Warp's `+` menu), iTerm2 or Terminal.
 
 ### The menu bar
 
@@ -91,7 +107,8 @@ flowchart LR
     subgraph disk["On disk, per Claude Desktop profile"]
         A["claude-code-sessions/.../local_*.json<br/>title, status, PRs, branch"]
         B["claude_desktop_config.json<br/>sidebar groups and order"]
-        C["~/.claude/sessions/&lt;pid&gt;.json<br/>live busy or idle"]
+        C["~/.claude/sessions/&lt;pid&gt;.json<br/>live busy, waiting or idle"]
+        D["~/.claude/projects/*/*.jsonl<br/>terminal sessions: titles, last reply"]
     end
     disk -->|every 2 s| S[Store]
     S --> N[Notch deck]
@@ -99,12 +116,16 @@ flowchart LR
     N -->|click| O[Opener]
     M -->|click| O
     O -->|"GURL Apple Event<br/>claude://code/continue?session=..."| P["The process of the profile<br/>that owns the session"]
+    O -->|"open: front its terminal tab<br/>closed: claude --resume"| T["Warp, Terminal, iTerm2"]
 ```
 
 Every profile runs the same app with the same bundle id, so `open claude://...` would land in whichever
 instance Launch Services picks. Session Deck reads each running instance's `--user-data-dir` from its process
 arguments, sends the `GURL` Apple Event straight to that process, then brings its window to the front.
 A profile that is not running is started first, the way a profile launcher does.
+
+A terminal session is found from its `claude` process: Session Deck walks up its parent processes to the app
+that hosts it, and reads its tty to pick the tab in Terminal or iTerm2.
 
 ## Install
 
@@ -118,7 +139,8 @@ Needs macOS 14 or later and the Xcode command line tools (Swift 5.9+). The scrip
 wraps it in `Session Deck.app`, signs it ad hoc, installs it in `~/Applications` and starts it.
 
 - **Open at login**: in the deck's `⋯` menu, or `--login-item on`.
-- **First click**: macOS may ask to let Session Deck control Claude. Allow it: that is the Apple Event above.
+- **First click**: macOS may ask to let Session Deck control Claude (the Apple Event above), and Terminal or
+  iTerm2 (to pick the tab). Allow it.
 - **Menu bar managers** (Thaw, Ice, Bartender): drag the Session Deck item out of the hidden section once.
 
 ## Configure
@@ -130,11 +152,13 @@ wraps it in `Session Deck.app`, signs it ad hoc, installs it in `~/Applications`
   "instances": {
     "Claude": { "label": "Work", "color": "#5AA9FF", "order": 0 },
     "Claude-Personal": { "label": "Personal" },
-    "Claude-Lab": { "hidden": true }
+    "Claude-Lab": { "hidden": true },
+    "cli": { "label": "Terminal" }
   },
   "notch": true,
   "recentDays": 7,
-  "hotkey": "opt+cmd+k"
+  "hotkey": "opt+cmd+k",
+  "terminal": "warp"
 }
 ```
 
@@ -147,8 +171,11 @@ wraps it in `Session Deck.app`, signs it ad hoc, installs it in `~/Applications`
 | `notch` | `true` | `false`: menu bar only, and the shortcut opens the popover |
 | `recentDays` | `7` | Sessions idle longer are hidden (pinned and running ones always show; toggle in `⋯`) |
 | `hotkey` | `opt+cmd+k` | `ctrl`, `opt`, `shift`, `cmd` plus a letter, digit or `space`; `none` turns it off |
+| `instances.cli` | label `Terminal` | The Terminal card: same `label`, `color` and `hidden` keys |
+| `terminal` | the terminal your last open session ran in | Where closed terminal sessions resume: `warp`, `iterm` or `terminal` |
 
 `<folder>` is the profile's folder in `~/Library/Application Support`: `Claude`, `Claude-Personal`, and so on.
+The Terminal card's key is `cli`.
 
 ## Command line
 
@@ -158,7 +185,8 @@ SessionDeck --demo                    # run with made-up sessions, for screensho
 SessionDeck --render <dir>            # PNGs of the views with your real data
 SessionDeck --render-assets <dir>     # the app icon and the README pictures, from the demo data
 SessionDeck --render-animation <dir>  # the README animation (needs `brew install webp` for img2webp)
-SessionDeck --open local_<id>         # send one session link to its profile, without raising it
+SessionDeck --open <id>               # send one session link to its profile, without raising it
+                                      # (terminal sessions: print what a click would do)
 SessionDeck --login-item on|off|status
 SessionDeck --selftest-notch          # drives the real panel with pointer moves and keys, prints PASS or FAIL
 ```
@@ -168,14 +196,16 @@ process it went to in `~/Library/Logs/SessionDeck.log`.
 
 ## Privacy
 
-- Reads local files only. No network, no telemetry, no account.
+- Reads local files only. No network, no telemetry, no account. The only file it writes outside its own
+  config and log is the Warp tab config above, when you resume a terminal session in Warp.
 - The pictures and the animation in this README come from `--render-assets` and `--render-animation`, which
   draw the real views with made-up data, so none of your sessions ever ends up in an image.
 
 ## Caveats
 
-- It reads Claude Desktop's private files (`claude-code-sessions`, `claude_desktop_config.json`) and uses the
-  `claude://code/continue` link. A Claude update can change any of them; `--dump` is the first check.
+- It reads Claude Desktop's private files (`claude-code-sessions`, `claude_desktop_config.json`), Claude Code's
+  session files (`~/.claude/sessions`, `~/.claude/projects`) and uses the `claude://code/continue` link. A Claude
+  update can change any of them; `--dump` is the first check.
 - Not affiliated with Anthropic.
 
 ## Project layout
@@ -186,6 +216,7 @@ Sources/SessionDeck/
   Store.swift          scans every profile every 2 s and builds the snapshot
   Models.swift         profiles, sessions, states, pull requests
   Opener.swift         GURL Apple Event to the right process, window activation
+  Terminal.swift       terminal sessions: scanning, focusing their tab, resuming them
   Notch.swift          the notch panel: hover, shortcut, banner, self-test
   DashboardView.swift  the deck: counters, profile cards, rows, banner card
   Keyboard.swift       the global shortcut (Carbon) and the deck keys

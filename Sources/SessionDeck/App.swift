@@ -80,6 +80,16 @@ private func openFromCommandLine(sessionId: String) -> Int32 {
         print("No open session \(sessionId)")
         return 2
     }
+    if let cli = session.cli {
+        // Terminal sessions only print what a click would do: focusing raises a window.
+        if let pid = cli.pid {
+            let app = TerminalLauncher.hostApp(of: pid)
+            print("Open in \(app?.localizedName ?? "no terminal found") (pid \(app?.processIdentifier ?? 0)), claude pid \(pid) on \(TerminalLauncher.ttyName(of: pid) ?? "no tty")")
+        } else {
+            print("Closed: a click runs `\(cli.resumeCommand)` in \(cli.cwd)")
+        }
+        return 0
+    }
     guard let pid = instance.pid else {
         print("\(instance.label) is not running")
         return 3

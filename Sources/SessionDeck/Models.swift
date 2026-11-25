@@ -9,6 +9,8 @@ struct Instance: Identifiable, Hashable {
     let accountUuid: String?
     let color: Color
     var pid: pid_t?
+    /// An SF Symbol drawn instead of the label's initial (the Terminal card).
+    var symbol: String?
 
     var isDefaultProfile: Bool { id == "Claude" }
     var isRunning: Bool { pid != nil }
@@ -98,6 +100,8 @@ struct Session: Identifiable, Hashable {
     let parentId: String?
     let pullRequests: [PullRequest]
     let group: SidebarGroup?
+    /// Set for sessions started from a terminal rather than the desktop app.
+    var cli: CLIInfo?
 
     var deepLink: URL { URL(string: "claude://code/continue?session=\(id)")! }
 }

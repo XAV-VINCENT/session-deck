@@ -80,6 +80,28 @@ enum Assets {
             size: popoverSize
         ), to: dir.appendingPathComponent("menubar.jpg"))
 
+        // The Terminal card: profiles folded, terminal sessions open.
+        let folded = DeckViewState(persist: false)
+        folded.collapsed = Set(store.snapshot.instances.filter { !$0.isTerminal }.map(\.id))
+        let terminalDeck = render(
+            DashboardView(store: store, viewState: folded, actions: actions)
+                .frame(width: 640, height: 600)
+                .background(Color.black),
+            size: CGSize(width: 640, height: 600)
+        )
+        let terminalSize = CGSize(width: 1000, height: 720)
+        save(render(
+            ZStack {
+                DeckWallpaper(scale: 1.4)
+                image(terminalDeck)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.5), radius: 30, y: 14)
+            }
+            .frame(width: terminalSize.width, height: terminalSize.height),
+            size: terminalSize
+        ), to: dir.appendingPathComponent("terminal.jpg"))
+
         // Social preview, 1280 x 640 (rendered at 2x, then halved).
         let og = render(OGImage(deck: image(expanded)), size: CGSize(width: 1280, height: 640))
         save(downscale(og, to: CGSize(width: 1280, height: 640)), to: dir.appendingPathComponent("og-image.png"))
@@ -226,7 +248,8 @@ enum Assets {
 
     /// Draws a view at 2x through AppKit, so text fields, menus and scroll views look like the app.
     static func render<V: View>(_ view: V, size: CGSize) -> NSBitmapImageRep {
-        let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
+        // A fixed clock draws spinners and pulses as SwiftUI shapes: Core Animation layers would not show up.
+        let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark).environment(\.deckClock, Date()))
         host.frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: .darkAqua)

@@ -16,6 +16,7 @@ final class Store: ObservableObject {
     init(demo: Bool = false) {
         isDemo = demo
         if demo { showOlder = false }
+        TerminalLauncher.preferred = config.terminal
     }
 
     var recentDays: Int { config.recentDays ?? 7 }
@@ -42,9 +43,12 @@ final class Store: ObservableObject {
     /// A session left `running`, or newly needs the user.
     var onTransition: ((Session) -> Void)?
 
-    private(set) var config = DeckConfig.load()
+    private(set) var config = DeckConfig.load() {
+        didSet { TerminalLauncher.preferred = config.terminal }
+    }
     private let queue = DispatchQueue(label: "session-deck.scan", qos: .utility)
     private var parsed: [String: (modified: Date, session: RawSession?)] = [:]
+    private let cli = CLIScanner()
     private var previousStates: [String: SessionState] = [:]
     private var timer: Timer?
     private var scanning = false
@@ -93,6 +97,9 @@ final class Store: ObservableObject {
             if leftRunning || newlyNeedsYou { onTransition?(session) }
         }
         previousStates = Dictionary(next.sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
+        // An unchanged scan redraws nothing, except every 30 s so "3m ago" keeps moving.
+        let unchanged = next.sessions == snapshot.sessions && next.instances == snapshot.instances
+        guard !unchanged || next.scannedAt.timeIntervalSince(snapshot.scannedAt) > 30 else { return }
         snapshot = next
     }
 
@@ -201,6 +208,27 @@ final class Store: ObservableObject {
             }
         }
         parsed = parsed.filter { seenFiles.contains($0.key) }
+
+        if config.instances[Instance.cliId]?.hidden != true {
+            let terminal = cli.scan()
+            if !terminal.sessions.isEmpty {
+                let custom = config.instances[Instance.cliId]
+                let openPid = terminal.sessions.first { $0.cli?.pid != nil }?.cli?.pid
+                instances.append(Instance(
+                    id: Instance.cliId,
+                    dataDir: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude"),
+                    label: custom?.label ?? "Terminal",
+                    accountUuid: nil,
+                    color: custom?.color.flatMap(Color.init(hex:)) ?? instancePalette[names.count % instancePalette.count],
+                    pid: openPid,
+                    symbol: "terminal.fill"
+                ))
+                sessions += terminal.sessions
+            }
+            if let host = terminal.hostBundleId {
+                DispatchQueue.main.async { TerminalLauncher.lastHostBundleId = host }
+            }
+        }
         return Snapshot(instances: instances, sessions: sessions, scannedAt: Date())
     }
 
@@ -225,7 +253,7 @@ final class Store: ObservableObject {
             detail = "Working…"
         case let status? where status != "idle":
             state = .needsYou
-            detail = "Waiting: \(status)"
+            detail = "Waiting for you: \(live?.waitingFor ?? status)"
         default:
             if raw.errorIsCurrent {
                 state = .error
@@ -267,6 +295,7 @@ final class Store: ObservableObject {
 
     private struct LiveStatus {
         let status: String
+        let waitingFor: String?
         let updatedAt: Date
     }
 
@@ -281,7 +310,7 @@ final class Store: ObservableObject {
                   kill(pid, 0) == 0 else { continue }
             let updated = Date(millis: json["updatedAt"]) ?? .distantPast
             if let existing = result[host], existing.updatedAt > updated { continue }
-            result[host] = LiveStatus(status: json["status"] as? String ?? "idle", updatedAt: updated)
+            result[host] = LiveStatus(status: json["status"] as? String ?? "idle", waitingFor: json["waitingFor"] as? String, updatedAt: updated)
         }
         return result
     }

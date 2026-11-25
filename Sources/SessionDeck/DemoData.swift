@@ -9,6 +9,10 @@ enum DemoData {
             instance("Claude-Personal", "Personal", 1, pid: 102),
             instance("Claude-Freelance", "Freelance", 2, pid: 103),
             instance("Claude-Lab", "Lab", 3, pid: nil),
+            Instance(
+                id: Instance.cliId, dataDir: URL(fileURLWithPath: "/tmp/.claude"), label: "Terminal", accountUuid: nil,
+                color: instancePalette[4], pid: 201, symbol: "terminal.fill"
+            ),
         ]
         let current = SidebarGroup(id: "current", name: "Current", order: 0)
         let stuck = SidebarGroup(id: "stuck", name: "Stuck", order: 1)
@@ -52,8 +56,28 @@ enum DemoData {
 
             session("l1", "Claude-Lab", "Prototype: voice notes to tasks", "voice-tasks", nil, ago(60 * 50), .idle,
                     "Transcription runs offline; next: pull tasks out of it"),
+
+            terminal("t1", "Bump Go to 1.24 in the tools repo", "tools", "chore/go-1.24", ago(2), .needsYou,
+                     "Waiting for you: permission to run go test ./...", pid: 201),
+            terminal("t2", "Release notes for v2.3", "acme-api", "release/2.3", ago(35), .idle,
+                     "Drafted CHANGELOG.md: 14 entries, 2 breaking changes", pid: 202),
+            terminal("t3", "Benchmark the image resizer", "imgsvc", nil, ago(60 * 20), .idle,
+                     "libvips is 3.1x faster than sharp on 500 photos", pid: nil),
         ]
         return Snapshot(instances: instances, sessions: sessions, scannedAt: now)
+    }
+
+    private static func terminal(
+        _ id: String, _ title: String, _ project: String, _ branch: String?, _ last: Date,
+        _ state: SessionState, _ detail: String, pid: pid_t?
+    ) -> Session {
+        let sessionId = "demo-\(id)"
+        return Session(
+            id: sessionId, instanceId: Instance.cliId, title: title, project: project, cwd: "/tmp/\(project)",
+            branch: branch, lastActivity: last, detail: detail, state: state, liveStatus: nil, isStarred: false,
+            parentId: nil, pullRequests: [], group: pid == nil ? CLIScanner.closedGroup : CLIScanner.openGroup,
+            cli: CLIInfo(sessionId: sessionId, cwd: "/tmp/\(project)", pid: pid, hostBundleId: nil)
+        )
     }
 
     private static func instance(_ id: String, _ label: String, _ index: Int, pid: pid_t?) -> Instance {

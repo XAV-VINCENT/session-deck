@@ -48,7 +48,7 @@ enum Render {
     }
 
     private static func write<V: View>(_ view: V, size: CGSize, to url: URL) {
-        let host = NSHostingView(rootView: view)
+        let host = NSHostingView(rootView: view.environment(\.deckClock, Date()))
         host.frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: .darkAqua)
