@@ -156,8 +156,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             guard let self else { return }
             self.notch?.peek(session)
             guard self.store.notifies else { return }
-            deckLog("\(kind.suffix): \(session.title) — banner\(Notifier.systemNotificationsWork ? " + notification" : " + sound")")
-            Notifier.post(session, instance: self.store.snapshot.instance(session.instanceId), kind: kind)
+            let did = Notifier.post(session, instance: self.store.snapshot.instance(session.instanceId), kind: kind)
+            deckLog("\(kind.suffix): \(session.title) — banner + \(did)")
         }
         if store.config.notifications == false { store.notifies = false }
         Notifier.start { [weak self] id in

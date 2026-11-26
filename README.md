@@ -153,7 +153,16 @@ Centre entries or the banner below.
   all** — no error, no timeout, nothing. Measured for two bundle ids in two locations. So alerts are the
   notch banner plus a sound, which need no permission and work over full-screen apps and on every Space.
 
-  For the other half — entries that survive a locked screen, and click-to-open — the app needs a certificate,
+  A banner nobody sees is the entire problem, though. So once you have been away from the keyboard for a
+  minute, or the screen is locked, the alert *also* goes out through `osascript` — which is Apple-signed and
+  will post on an unsigned app's behalf — and that entry waits in Notification Centre until you come back.
+  It is attributed to Script Editor and does nothing when clicked, which is why it stands in for the banner
+  rather than replacing it, and why it is not posted while you are at the desk: the banner already said it,
+  and two at once is noise. Session text reaches AppleScript through `argv`, never the script source;
+  interpolating a title into the script is a syntax error the first time one contains a quote, and worse
+  the first time one is written to be.
+
+  For the rest — entries of the app's own name at any hour, and click-to-open — the app needs a certificate,
   and a free Apple ID supplies one: Xcode ▸ Settings ▸ Accounts ▸ **+** ▸ Apple ID, sign in, pick the team,
   **Manage Certificates…** ▸ **+** ▸ **Apple Development**. `build.sh` then finds it without being told:
   `Developer ID Application` first, `Apple Development` second, `SIGN_IDENTITY=…` overrides both. The app
@@ -193,7 +202,7 @@ Centre entries or the banner below.
 | `hotkey` | `opt+cmd+k` | `ctrl`, `opt`, `shift`, `cmd` plus a letter, digit or `space`; `none` turns it off |
 | `instances.cli` | label `Terminal` | The Terminal card: same `label`, `color` and `hidden` keys |
 | `terminal` | the terminal your last open session ran in | Where closed terminal sessions resume: `warp`, `iterm` or `terminal` |
-| `notifications` | `true` | `false` silences the banner's sound (also in the `⋯` menu) |
+| `notifications` | `true` | `false` silences the sound and any notification (also in the `⋯` menu) |
 
 `<folder>` is the profile's folder in `~/Library/Application Support`: `Claude`, `Claude-Personal`, and so on.
 The Terminal card's key is `cli`.

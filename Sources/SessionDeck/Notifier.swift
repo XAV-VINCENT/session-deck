@@ -25,6 +25,62 @@ enum Notifier {
 
     private static let delegate = NotificationDelegate()
 
+    // MARK: - A durable entry without a signature
+
+    /// How long without a keypress or a mouse move counts as away from the desk.
+    static let awaySeconds: Double = 60
+
+    /// The notch banner lasts six seconds and leaves nothing behind, so an alert that fires while nobody
+    /// is looking is simply lost — which is the whole reason to want Notification Centre. This app cannot
+    /// register with it unsigned, but `osascript` is Apple-signed and will post on our behalf. The entry
+    /// is attributed to Script Editor and does nothing when clicked, so it stands in for the banner when
+    /// the banner would have gone unseen, rather than replacing it. At the desk the banner already said
+    /// it, and a second one in the corner is just noise.
+    static func isAway(idleSeconds: Double, screenLocked: Bool) -> Bool {
+        screenLocked || idleSeconds >= awaySeconds
+    }
+
+    /// Seconds since the last human input. Asked per event type, because `CGEventType` cannot be built
+    /// from the catch-all "any input" constant in Swift — it is not one of the enum's cases.
+    static var secondsIdle: Double {
+        let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown, .flagsChanged, .scrollWheel]
+        return types.map { CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0) }.min() ?? 0
+    }
+
+    static var screenIsLocked: Bool {
+        guard let info = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        return info["CGSSessionScreenIsLocked"] as? Bool ?? false
+    }
+
+    /// Separate from the posting so the test can prove the text never reaches the script source.
+    /// Everything a human wrote goes after `--`, where AppleScript reads it as data through `argv`.
+    /// Interpolating a session title into the script instead is a syntax error the first time one holds
+    /// a quote, and an injected command the first time one is written to be.
+    static func osascriptArguments(title: String, subtitle: String, body: String) -> [String] {
+        [
+            "-e", "on run argv",
+            "-e", "display notification (item 3 of argv) with title (item 1 of argv) subtitle (item 2 of argv)",
+            "-e", "end run",
+            "--", title, subtitle, body,
+        ]
+    }
+
+    @discardableResult
+    static func postThroughOSAScript(title: String, subtitle: String, body: String) -> Bool {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = osascriptArguments(title: title, subtitle: subtitle, body: body)
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch {
+            deckLog("borrowed notification failed to run: \(error.localizedDescription)")
+            return false
+        }
+        proc.waitUntilExit()
+        if proc.terminationStatus != 0 { deckLog("borrowed notification exited \(proc.terminationStatus)") }
+        return proc.terminationStatus == 0
+    }
+
     /// No Team ID means ad-hoc or unsigned, and the notification daemon will not register such an app:
     /// `requestAuthorization` comes back "Notifications are not allowed for this application". Worth knowing
     /// up front, so the app stops asking every launch and says plainly which half of this feature it has.
@@ -74,18 +130,27 @@ enum Notifier {
 
     /// One notification per session per kind: posting again with the same identifier replaces the earlier
     /// one, so a session that flips state repeatedly leaves one entry, not a column of them.
-    static func post(_ session: Session, instance: Instance?, kind: Kind) {
+    /// Returns what it did, for the log: the caller adds the banner, which is the one part it owns.
+    @discardableResult
+    static func post(_ session: Session, instance: Instance?, kind: Kind) -> String {
         sound(for: kind)
-        guard isAvailable, systemNotificationsWork else { return }
-        let content = UNMutableNotificationContent()
-        content.title = session.title
-        content.subtitle = [kind.label, instance?.label, session.project]
+        guard isAvailable else { return "sound" }
+        let subtitle = [kind.label, instance?.label, session.project]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
             .joined(separator: " · ")
-        if let detail = session.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
-            content.body = detail
+        let detail = session.detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard systemNotificationsWork else {
+            guard isAway(idleSeconds: secondsIdle, screenLocked: screenIsLocked) else { return "sound" }
+            // Never empty: `display notification ""` posts a blank entry.
+            let ok = postThroughOSAScript(title: session.title, subtitle: subtitle,
+                                          body: detail.isEmpty ? kind.label : detail)
+            return ok ? "sound + borrowed entry" : "sound (borrowed entry refused)"
         }
+        let content = UNMutableNotificationContent()
+        content.title = session.title
+        content.subtitle = subtitle
+        if !detail.isEmpty { content.body = detail }
         content.sound = .default
         content.threadIdentifier = session.id
         content.userInfo = ["sessionId": session.id]
@@ -93,6 +158,7 @@ enum Notifier {
         UNUserNotificationCenter.current().add(request) { error in
             if let error { deckLog("notification not posted: \(error.localizedDescription)") }
         }
+        return "notification"
     }
 }
 
@@ -179,10 +245,35 @@ extension Notifier {
                NSSound(named: "Submarine") != nil && NSSound(named: "Glass") != nil,
                "Submarine and Glass")
 
+        // A session title is whatever someone typed at Claude, so it reaches AppleScript as data or not
+        // at all. This title carries the two things that break an interpolated script — a quote and a
+        // backslash — and a command to run if the quoting ever fails open.
+        let hostile = #"He said "hi" \ then: quit application "Finder""#
+        let args = osascriptArguments(title: hostile, subtitle: "Needs you", body: hostile)
+        let fragments = args.indices.filter { args[$0] == "-e" && $0 + 1 < args.count }.map { args[$0 + 1] }
+        let data = args.firstIndex(of: "--").map { Array(args[($0 + 1)...]) } ?? []
+        expect("a hostile title never reaches the script source",
+               fragments.allSatisfy { !$0.contains("quit application") } && data.contains(hostile),
+               "\(fragments.count) script fragments, \(data.count) arguments after --")
+        // Both report what happened rather than what should have: a FAIL whose evidence line reads like
+        // a PASS is the same trap in miniature.
+        let posted = postThroughOSAScript(title: "Session Deck self-test", subtitle: "Needs you", body: hostile)
+        expect("the borrowed entry posts, hostile text and all", posted,
+               posted ? "osascript exited 0" : "osascript would not run the script")
+        let gate = [isAway(idleSeconds: 0, screenLocked: false),
+                    isAway(idleSeconds: awaySeconds - 1, screenLocked: false),
+                    isAway(idleSeconds: awaySeconds, screenLocked: false),
+                    isAway(idleSeconds: 0, screenLocked: true)]
+        expect("away means a locked screen or a quiet minute", gate == [false, false, true, true],
+               "0 s, 59 s, 60 s, locked -> " + gate.map { $0 ? "away" : "here" }.joined(separator: ", "))
+        expect("the idle clock reads", secondsIdle >= 0 && secondsIdle.isFinite,
+               String(format: "%.0f s since the last keypress or mouse move", secondsIdle))
+
         guard !isAdHocSigned else {
             print("SKIP system notifications: this build is ad-hoc signed, which the notification daemon")
-            print("SKIP   will not register. Sign it with a Developer ID to add Notification Centre entries")
-            print("SKIP   that survive a locked screen; the banner and sound above work either way.")
+            print("SKIP   will not register. Alerts are the banner and a sound, plus an entry borrowed")
+            print("SKIP   through osascript while you are away from the desk. Sign it with a Developer ID")
+            print("SKIP   for entries of this app's own, at any time, that open the session when clicked.")
             print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
         }
