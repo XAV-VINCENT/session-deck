@@ -16,8 +16,17 @@ final class NotchModel: ObservableObject {
     @Published var deckMounted = false
 
     static let wing: CGFloat = 40
+    /// The deck's width, and the tallest the island may get. Its height follows the list: `expandedHeight`.
     static let expandedSize = CGSize(width: 680, height: 620)
+    /// Title bar, filters and footer come to about 180pt, so under this there is no list left to shorten.
+    static let minExpandedHeight: CGFloat = 220
     static let peekSize = CGSize(width: 500, height: 74)
+
+    /// How tall the open island is right now: what the list measured, clamped. The panel keeps its full size,
+    /// so a shorter deck moves the shape only, never the window.
+    @Published var expandedHeight: CGFloat = NotchModel.expandedSize.height
+    /// What the list last asked for, before clamping — so a capped deck can be told from a short one.
+    @Published private(set) var naturalHeight: CGFloat = NotchModel.expandedSize.height
 
     var collapsedSize: CGSize {
         CGSize(width: notchSize.width + Self.wing * 2, height: notchSize.height)
@@ -27,8 +36,17 @@ final class NotchModel: ObservableObject {
         switch mode {
         case .collapsed: return collapsedSize
         case .peek: return CGSize(width: max(collapsedSize.width, Self.peekSize.width), height: notchSize.height + Self.peekSize.height)
-        case .expanded: return Self.expandedSize
+        case .expanded: return CGSize(width: Self.expandedSize.width, height: expandedHeight)
         }
+    }
+
+    /// The deck measured itself. Clamped both ways, and ignored when it barely moved, so sub-pixel
+    /// relayout noise never starts an animation.
+    func setExpandedHeight(_ height: CGFloat) {
+        naturalHeight = height
+        let clamped = min(max(height, Self.minExpandedHeight), Self.expandedSize.height)
+        guard abs(clamped - expandedHeight) > 0.5 else { return }
+        expandedHeight = clamped
     }
 
     var cornerRadius: CGFloat {
@@ -45,6 +63,8 @@ enum NotchMotion {
     static let open = Animation.spring(response: 0.3, dampingFraction: 0.8)
     static let close = Animation.spring(response: 0.24, dampingFraction: 0.92)
     static let peek = Animation.spring(response: 0.34, dampingFraction: 0.74)
+    /// The island growing or shrinking while it is open: a filter, or a session arriving or leaving.
+    static let resize = Animation.spring(response: 0.28, dampingFraction: 0.9)
     /// Pointer on the notch this long opens the deck (filters out a cursor just passing through).
     static let hoverDelay = 0.03
     static let leaveDelay = 0.3
@@ -307,8 +327,11 @@ struct NotchRootView: View {
         let open = model.mode == .expanded
         return ZStack(alignment: .top) {
             if model.deckMounted || open {
-                DashboardView(store: store, viewState: viewState, actions: actions, notchSize: model.notchSize)
-                    .frame(width: NotchModel.expandedSize.width, height: NotchModel.expandedSize.height)
+                DashboardView(store: store, viewState: viewState, actions: actions, notchSize: model.notchSize,
+                              onNaturalHeight: { height in
+                                  withAnimation(NotchMotion.resize) { model.setExpandedHeight(height) }
+                              })
+                    .frame(width: NotchModel.expandedSize.width, height: model.expandedHeight)
                     .opacity(open ? 1 : 0)
                     .scaleEffect(open ? 1 : 0.97, anchor: .top)
                     .animation(open ? .easeOut(duration: 0.16) : .easeIn(duration: 0.1), value: open)
@@ -460,6 +483,7 @@ extension NotchController {
         expect("live pulse draws and pulses", inked(pulse) > 50 && pulse.isPulsing, "\(inked(pulse)) px")
 
         let firstRow = DeckLayout(store: store, viewState: viewState).rows.first
+        var tallest: CGFloat = 0
         let steps: [(Double, () -> Void)] = [
             (0.3, {
                 frame("collapsed at start", open: false)
@@ -504,6 +528,28 @@ extension NotchController {
             (1.0, {
                 frame("opening collapses", open: false)
                 controller.toggleFromKeyboard()
+            }),
+            // The island is only as tall as the list. Every demo filter still overflows the cap, so the
+            // short case is a search that leaves one session; the panel behind it must not move either way.
+            (0.8, {
+                viewState.filter = .all
+                viewState.query = ""
+            }),
+            (0.8, {
+                tallest = controller.model.naturalHeight
+                viewState.query = "flaky"
+            }),
+            (0.8, {
+                let shortest = controller.model.expandedHeight
+                let panelUnmoved = abs(controller.panel.frame.height - panelSize.height) < 1
+                expect("the island is as tall as the list, no taller",
+                       shortest < NotchModel.expandedSize.height - 100
+                           && shortest >= NotchModel.minExpandedHeight
+                           && abs(shortest - controller.model.naturalHeight) < 1
+                           && panelUnmoved,
+                       String(format: "%.0f pt for one session, %.0f pt asked for by all 19 (capped at %.0f), panel %@",
+                              shortest, tallest, NotchModel.expandedSize.height, panelUnmoved ? "unchanged" : "RESIZED"))
+                viewState.query = ""
             }),
             (0.8, {
                 viewState.query = "" // the focused search field catches whatever is typed on this Mac meanwhile
