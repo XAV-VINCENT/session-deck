@@ -138,18 +138,30 @@ cd session-deck
 ```
 
 Needs macOS 14 or later and the Xcode command line tools (Swift 5.9+). The script builds a release binary,
-wraps it in `Session Deck.app`, signs it ad hoc, installs it in `~/Applications` and starts it.
+wraps it in `Session Deck.app`, signs it, installs it in `~/Applications` and starts it. It signs with a
+real identity when this Mac has one and ad hoc when it does not, which decides whether you get Notification
+Centre entries or the banner below.
 
 - **Open at login**: in the deck's `⋯` menu, or `--login-item on`.
 - **First click**: macOS may ask to let Session Deck control Claude (the Apple Event above), and Terminal or
   iTerm2 (to pick the tab). Allow it.
 - **Menu bar managers** (Thaw, Ice, Bartender): drag the Session Deck item out of the hidden section once.
-- **Notification Centre**: `build.sh` signs ad hoc, and the notification daemon will not register an app
-  without a Team ID — `requestAuthorization` answers "Notifications are not allowed for this application",
-  for any bundle id, in any location. So alerts are the notch banner plus a sound, which need no permission
-  and work over full-screen apps and on every Space. Sign the app with a real identity and the same build
-  posts proper notifications instead, click-to-open included: the code is already there and switches on when
-  a Team ID is present. `--selftest-notify` reports which half you have.
+- **Notification Centre**: an ad-hoc signature carries no Team Identifier, and the notification daemon will
+  not register an app that has none. The refusal wears two faces, and one of them reads as a bug in the app:
+  run the binary from a terminal and `requestAuthorization` answers "Notifications are not allowed for this
+  application"; launch the bundle through Launch Services and the completion handler is **never called at
+  all** — no error, no timeout, nothing. Measured for two bundle ids in two locations. So alerts are the
+  notch banner plus a sound, which need no permission and work over full-screen apps and on every Space.
+
+  For the other half — entries that survive a locked screen, and click-to-open — the app needs a certificate,
+  and a free Apple ID supplies one: Xcode ▸ Settings ▸ Accounts ▸ **+** ▸ Apple ID, sign in, pick the team,
+  **Manage Certificates…** ▸ **+** ▸ **Apple Development**. `build.sh` then finds it without being told:
+  `Developer ID Application` first, `Apple Development` second, `SIGN_IDENTITY=…` overrides both. The app
+  code needs no change — it detects the Team ID at launch and skips the request when there is none, so a
+  signed build switches the real notifications on by itself. `--selftest-notify` reports which half you have.
+
+  *Unverified here*: this Mac has no signing identity, so a registered build has never actually been
+  observed. The Team ID is the only difference the daemon is known to be objecting to, not a proven cure.
 
 ## Configure
 
