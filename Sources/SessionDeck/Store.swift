@@ -9,16 +9,22 @@ final class Store: ObservableObject {
     @Published var showOlder = UserDefaults.standard.bool(forKey: "showOlder") {
         didSet { if !isDemo { UserDefaults.standard.set(showOlder, forKey: "showOlder") } }
     }
-    /// Notify on the same two transitions the notch banner shows. On unless config.json or the menu says no.
-    @Published var notifies = UserDefaults.standard.object(forKey: "notifies") as? Bool ?? true {
+    /// Sound on the same two transitions the notch banner shows, and **off until asked for**: Claude
+    /// Desktop already notifies when a Code session finishes, so a sound on by default would be the
+    /// second alert for one event. Terminal sessions get nothing of their own, which is the case this
+    /// is worth switching on for.
+    @Published var notifies = UserDefaults.standard.object(forKey: "notifies") as? Bool ?? false {
         didSet { if !isDemo { UserDefaults.standard.set(notifies, forKey: "notifies") } }
     }
 
-    /// What the app actually checks. `notifications` in config.json is an override, not a preference to
-    /// save: writing it into UserDefaults meant that deleting the key later left alerts off for good,
-    /// and Reload config never reconsidered it. The menu toggle is the saved half; the key outranks it
-    /// for as long as it is there.
-    var alertsOn: Bool { config.notifications ?? notifies }
+    /// `notifications` in config.json is an override, not a preference to save: assigning it into
+    /// `notifies` wrote it to UserDefaults, so deleting the key later left alerts off for good and
+    /// Reload config never reconsidered it. Kept a pure function so the precedence can be tested
+    /// without a Store, since the bug was in which value won rather than in either value.
+    static func alertsOn(config: Bool?, toggle: Bool) -> Bool { config ?? toggle }
+
+    /// What the app actually checks.
+    var alertsOn: Bool { Self.alertsOn(config: config.notifications, toggle: notifies) }
 
     /// Made-up profiles and sessions (`--demo`, README pictures): nothing on disk is read.
     let isDemo: Bool

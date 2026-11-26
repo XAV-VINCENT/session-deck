@@ -278,6 +278,12 @@ extension Notifier {
                     isAway(idleSeconds: awaySeconds - 1, screenLocked: false),
                     isAway(idleSeconds: awaySeconds, screenLocked: false),
                     isAway(idleSeconds: 0, screenLocked: true)]
+        // config.json outranks the menu toggle, and neither value is a default the other can smuggle in.
+        let precedence = [Store.alertsOn(config: nil, toggle: false), Store.alertsOn(config: nil, toggle: true),
+                          Store.alertsOn(config: false, toggle: true), Store.alertsOn(config: true, toggle: false)]
+        expect("config.json outranks the menu toggle", precedence == [false, true, false, true],
+               "toggle alone off/on, then config false over toggle on, config true over toggle off -> "
+                   + precedence.map { $0 ? "on" : "off" }.joined(separator: ", "))
         expect("away means a locked screen or a quiet minute", gate == [false, false, true, true],
                "0 s, 59 s, 60 s, locked -> " + gate.map { $0 ? "away" : "here" }.joined(separator: ", "))
         expect("the idle clock reads", secondsIdle >= 0 && secondsIdle.isFinite,
