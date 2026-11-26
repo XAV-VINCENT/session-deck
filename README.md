@@ -38,7 +38,7 @@ them all and puts the answer around your notch.
   </tr>
   <tr>
     <td>Running sessions on the left of the camera, sessions waiting for you on the right. Nothing pending: a green check.</td>
-    <td>A session finished or started waiting for you: a banner drops for 6 seconds and a sound plays — <code>Glass</code> for finished, <code>Submarine</code> for waiting. Click it to jump in.</td>
+    <td>A session finished or started waiting for you: a banner drops for 6 seconds and a sound plays: <code>Glass</code> for finished, <code>Submarine</code> for waiting. Click it to jump in.</td>
   </tr>
 </table>
 
@@ -146,33 +146,12 @@ Centre entries or the banner below.
 - **First click**: macOS may ask to let Session Deck control Claude (the Apple Event above), and Terminal or
   iTerm2 (to pick the tab). Allow it.
 - **Menu bar managers** (Thaw, Ice, Bartender): drag the Session Deck item out of the hidden section once.
-- **Notification Centre**: an ad-hoc signature carries no Team Identifier, and the notification daemon will
-  not register an app that has none. The refusal wears two faces, and one of them reads as a bug in the app:
-  run the binary from a terminal and `requestAuthorization` answers "Notifications are not allowed for this
-  application"; launch the bundle through Launch Services and the completion handler is **never called at
-  all** — no error, no timeout, nothing. Measured for two bundle ids in two locations. So alerts are the
-  notch banner plus a sound, which need no permission and work over full-screen apps and on every Space.
-
-  A banner nobody sees is the entire problem, though. So once you have been away from the keyboard for a
-  minute, or the screen is locked, the alert *also* goes out through `osascript` — which is Apple-signed and
-  will post on an unsigned app's behalf — and that entry waits in Notification Centre until you come back.
-  It is attributed to Script Editor and does nothing when clicked, which is why it stands in for the banner
-  rather than replacing it, and why it is not posted while you are at the desk: the banner already said it,
-  and two at once is noise. Seen end to end on 2026-11-26: a run ended while the desk was empty and the
-  log read `finished: ... — banner + sound + borrowed entry`, the last clause being `osascript`'s own exit
-  status rather than an assumption. Session text reaches AppleScript through `argv`, never the script source;
-  interpolating a title into the script is a syntax error the first time one contains a quote, and worse
-  the first time one is written to be.
-
-  For the rest — entries of the app's own name at any hour, and click-to-open — the app needs a certificate,
-  and a free Apple ID supplies one: Xcode ▸ Settings ▸ Accounts ▸ **+** ▸ Apple ID, sign in, pick the team,
-  **Manage Certificates…** ▸ **+** ▸ **Apple Development**. `build.sh` then finds it without being told:
-  `Developer ID Application` first, `Apple Development` second, `SIGN_IDENTITY=…` overrides both. The app
-  code needs no change — it detects the Team ID at launch and skips the request when there is none, so a
-  signed build switches the real notifications on by itself. `--selftest-notify` reports which half you have.
-
-  *Unverified here*: this Mac has no signing identity, so a registered build has never actually been
-  observed. The Team ID is the only difference the daemon is known to be objecting to, not a proven cure.
+- **Notification Centre**: an ad-hoc signature has no Team Identifier, which the daemon requires, so this
+  build posts no entries of its own. Alerts are the notch banner and a sound, plus one borrowed through
+  Apple-signed `osascript` when the screen is locked or you have been away a minute; clicking that one
+  will not open the session. Sign the app and `build.sh` uses the identity, enabling its own entries.
+  A free Apple ID supplies a certificate: Xcode ▸ Settings ▸ Accounts ▸ **+** ▸ Apple ID, then
+  **Manage Certificates…** ▸ **+** ▸ **Apple Development**. `--selftest-notify` says which half you have.
 
 ## Configure
 
@@ -233,6 +212,9 @@ process it went to in `~/Library/Logs/SessionDeck.log`.
   config and log is the Warp tab config above, when you resume a terminal session in Warp.
 - The pictures and the animation in this README come from `--render-assets` and `--render-animation`, which
   draw the real views with made-up data, so none of your sessions ever ends up in an image.
+- An alert carries the session's title, its project and its status detail or wrap-up summary, so those
+  reach Notification Centre, and a borrowed entry passes through `osascript` on the way. Alerts off in the
+  `⋯` menu, or `"notifications": false`, keeps all of it inside the app.
 
 ## Caveats
 

@@ -25,7 +25,7 @@ final class NotchModel: ObservableObject {
     /// How tall the open island is right now: what the list measured, clamped. The panel keeps its full size,
     /// so a shorter deck moves the shape only, never the window.
     @Published var expandedHeight: CGFloat = NotchModel.expandedSize.height
-    /// What the list last asked for, before clamping — so a capped deck can be told from a short one.
+    /// What the list last asked for, before clamping, so a capped deck can be told from a short one.
     @Published private(set) var naturalHeight: CGFloat = NotchModel.expandedSize.height
 
     var collapsedSize: CGSize {
@@ -185,10 +185,17 @@ final class NotchController {
         collapse()
     }
 
+    /// The tallest the island has been since this opening. The hover area holds that height until the
+    /// deck closes, because the list can shrink while the pointer rests on a lower row: an area that
+    /// shrank with it would read the pointer as outside and collapse the deck under them on the next
+    /// small move. Growing is fine to follow; shrinking is not.
+    private var hotFloor: CGFloat = 0
+
     /// The black shape on screen (it grows with the mode), plus the screen's top edge.
     private var hotRect: NSRect {
         guard let screen else { return .zero }
-        let size = model.size
+        var size = model.size
+        if model.mode != .collapsed { size.height = max(size.height, hotFloor) }
         return NSRect(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - size.height, width: size.width, height: size.height + 2)
     }
 
@@ -217,6 +224,7 @@ final class NotchController {
 
     private func pointerMoved(to point: NSPoint) {
         lastPointer = point
+        if model.mode != .collapsed { hotFloor = max(hotFloor, model.size.height) }
         mountDeck(approachRect.contains(point))
         let inside = hotRect.contains(point)
         panel.ignoresMouseEvents = !(inside && model.mode != .collapsed)
@@ -251,6 +259,7 @@ final class NotchController {
 
     private func expand() {
         withAnimation(NotchMotion.open) { model.mode = .expanded }
+        hotFloor = max(hotFloor, model.size.height)
         panel.ignoresMouseEvents = !hotRect.contains(lastPointer) && !openedByKeyboard
     }
 
@@ -258,6 +267,7 @@ final class NotchController {
         collapseWork?.cancel()
         defer { mountDeck(approachRect.contains(lastPointer)) }
         openedByKeyboard = false
+        hotFloor = 0
         viewState.selectedId = nil
         withAnimation(NotchMotion.close) { model.mode = .collapsed }
         panel.ignoresMouseEvents = true
@@ -549,6 +559,42 @@ extension NotchController {
                            && panelUnmoved,
                        String(format: "%.0f pt for one session, %.0f pt asked for by all 19 (capped at %.0f), panel %@",
                               shortest, tallest, NotchModel.expandedSize.height, panelUnmoved ? "unchanged" : "RESIZED"))
+                viewState.query = ""
+            }),
+            // The list shrinking must not pull the hover area out from under the pointer. This needs a
+            // deck opened by HOVER: one opened by the shortcut ignores the pointer leaving altogether
+            // (see hoverChanged), so these same steps would pass there without proving anything.
+            // collapse() rather than Escape: the steps above leave the search field focused, which eats
+            // the key, and the deck would stay open BY KEYBOARD. The first version of this test did
+            // exactly that and passed with the fix reverted.
+            (0.5, { controller.collapse() }),
+            (0.5, {
+                expect("the deck is shut before the shrink case, so the reopen is a hover",
+                       controller.model.mode == .collapsed, "\(controller.model.mode)")
+                viewState.filter = .all
+                viewState.query = ""
+                controller.pointerMoved(to: top)
+            }),
+            (0.5, {
+                expect("hover reopens the deck for the shrink case", controller.model.mode == .expanded,
+                       "\(controller.model.mode)")
+                controller.pointerMoved(to: insideDeck)
+            }),
+            (0.5, { viewState.query = "flaky" }),
+            (1.2, {
+                // The shrink travels through a SwiftUI layout pass, so it is not in place immediately.
+                // An earlier version of this moved the pointer 0.5 s after the query and passed with the
+                // fix reverted, because the island was still 620 pt and the scenario never happened. So
+                // the premise is asserted here, at the moment of the move, not at the end.
+                let depth = screen.frame.maxY - insideDeck.y
+                expect("the island shrank above the pointer before it moved",
+                       controller.model.expandedHeight < depth,
+                       String(format: "island %.0f pt, pointer %.0f pt down", controller.model.expandedHeight, depth))
+                controller.pointerMoved(to: NSPoint(x: insideDeck.x, y: insideDeck.y - 1))
+            }),
+            (0.8, {
+                expect("the list shrinking does not close the deck under the pointer",
+                       controller.model.mode == .expanded, "\(controller.model.mode)")
                 viewState.query = ""
             }),
             (0.8, {

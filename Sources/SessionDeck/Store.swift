@@ -14,6 +14,12 @@ final class Store: ObservableObject {
         didSet { if !isDemo { UserDefaults.standard.set(notifies, forKey: "notifies") } }
     }
 
+    /// What the app actually checks. `notifications` in config.json is an override, not a preference to
+    /// save: writing it into UserDefaults meant that deleting the key later left alerts off for good,
+    /// and Reload config never reconsidered it. The menu toggle is the saved half; the key outranks it
+    /// for as long as it is there.
+    var alertsOn: Bool { config.notifications ?? notifies }
+
     /// Made-up profiles and sessions (`--demo`, README pictures): nothing on disk is read.
     let isDemo: Bool
 
@@ -56,7 +62,7 @@ final class Store: ObservableObject {
     private var previousStates: [String: SessionState] = [:]
     /// A run that ends on a question arrives as **two** scans, not one: the run stops, and the question
     /// appears on the next pass two seconds later. Alerting on the first gives two sounds for one event
-    /// — measured once in fifteen transitions on 2026-11-26. So a finish waits one scan to see whether a
+    /// (measured once in fifteen transitions on 2026-11-26). So a finish waits one scan to see whether a
     /// question follows it, and a question never waits, because it is the one that actually wants you.
     private var finishHeld: Set<String> = []
     private var timer: Timer?

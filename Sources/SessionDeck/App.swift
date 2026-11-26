@@ -155,11 +155,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         store.onTransition = { [weak self] session, kind in
             guard let self else { return }
             self.notch?.peek(session)
-            guard self.store.notifies else { return }
+            guard self.store.alertsOn else { return }
             let did = Notifier.post(session, instance: self.store.snapshot.instance(session.instanceId), kind: kind)
-            deckLog("\(kind.suffix): \(session.title) — banner + \(did)")
+            deckLog("\(kind.suffix): \(session.title) (banner + \(did))")
         }
-        if store.config.notifications == false { store.notifies = false }
         Notifier.start { [weak self] id in
             guard let self, let session = self.store.snapshot.sessions.first(where: { $0.id == id }) else { return }
             self.open(session)

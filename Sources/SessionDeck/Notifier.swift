@@ -6,7 +6,7 @@ import UserNotifications
 /// and one that started waiting for an answer.
 ///
 /// The notch banner covers the same two events, but only for six seconds and only if you are looking at
-/// that screen. These survive a full-screen app, another Space, and being away from the desk — they make a
+/// that screen. These survive a full-screen app, another Space, and being away from the desk; they make a
 /// sound and stay in Notification Centre until dismissed.
 enum Notifier {
     enum Kind {
@@ -31,7 +31,7 @@ enum Notifier {
     static let awaySeconds: Double = 60
 
     /// The notch banner lasts six seconds and leaves nothing behind, so an alert that fires while nobody
-    /// is looking is simply lost — which is the whole reason to want Notification Centre. This app cannot
+    /// is looking is simply lost, which is the whole reason to want Notification Centre. This app cannot
     /// register with it unsigned, but `osascript` is Apple-signed and will post on our behalf. The entry
     /// is attributed to Script Editor and does nothing when clicked, so it stands in for the banner when
     /// the banner would have gone unseen, rather than replacing it. At the desk the banner already said
@@ -41,7 +41,7 @@ enum Notifier {
     }
 
     /// Seconds since the last human input. Asked per event type, because `CGEventType` cannot be built
-    /// from the catch-all "any input" constant in Swift — it is not one of the enum's cases.
+    /// from the catch-all "any input" constant in Swift: it is not one of the enum's cases.
     static var secondsIdle: Double {
         let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown, .flagsChanged, .scrollWheel]
         return types.map { CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0) }.min() ?? 0
@@ -65,20 +65,30 @@ enum Notifier {
         ]
     }
 
-    @discardableResult
-    static func postThroughOSAScript(title: String, subtitle: String, body: String) -> Bool {
+    /// Built but not started, so the test can run it and read its status while nothing in the app waits.
+    static func osascriptProcess(title: String, subtitle: String, body: String) -> Process {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         proc.arguments = osascriptArguments(title: title, subtitle: subtitle, body: body)
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
-        do { try proc.run() } catch {
-            deckLog("borrowed notification failed to run: \(error.localizedDescription)")
-            return false
+        return proc
+    }
+
+    /// The caller is `publish()`, on the main thread, in the middle of a scan. Waiting for a process to
+    /// exit there stalls the interface for as long as osascript takes to start, so the status is read in
+    /// the termination handler instead, which is the only place it is known once nothing blocks.
+    static func postThroughOSAScript(title: String, subtitle: String, body: String) {
+        let proc = osascriptProcess(title: title, subtitle: subtitle, body: body)
+        proc.terminationHandler = { finished in
+            guard finished.terminationStatus != 0 else { return }
+            DispatchQueue.main.async {
+                deckLog("borrowed entry refused: osascript exited \(finished.terminationStatus)")
+            }
         }
-        proc.waitUntilExit()
-        if proc.terminationStatus != 0 { deckLog("borrowed notification exited \(proc.terminationStatus)") }
-        return proc.terminationStatus == 0
+        do { try proc.run() } catch {
+            deckLog("borrowed entry failed to run: \(error.localizedDescription)")
+        }
     }
 
     /// No Team ID means ad-hoc or unsigned, and the notification daemon will not register such an app:
@@ -95,7 +105,7 @@ enum Notifier {
         return dict[kSecCodeInfoTeamIdentifier as String] == nil
     }()
 
-    /// Set once the system answers. False until then, and false for good when it refuses — which is what an
+    /// Set once the system answers. False until then, and false for good when it refuses, which is what an
     /// ad-hoc signed app gets ("Notifications are not allowed for this application"), so the sound below is
     /// the whole notification on an unsigned build, and steps aside the moment the app is signed properly.
     private(set) static var systemNotificationsWork = false
@@ -143,9 +153,10 @@ enum Notifier {
         guard systemNotificationsWork else {
             guard isAway(idleSeconds: secondsIdle, screenLocked: screenIsLocked) else { return "sound" }
             // Never empty: `display notification ""` posts a blank entry.
-            let ok = postThroughOSAScript(title: session.title, subtitle: subtitle,
-                                          body: detail.isEmpty ? kind.label : detail)
-            return ok ? "sound + borrowed entry" : "sound (borrowed entry refused)"
+            postThroughOSAScript(title: session.title, subtitle: subtitle,
+                                 body: detail.isEmpty ? kind.label : detail)
+            // Sent, not confirmed: a refusal is logged by the handler, since nothing waits for it here.
+            return "sound + borrowed entry sent"
         }
         let content = UNMutableNotificationContent()
         content.title = session.title
@@ -212,7 +223,7 @@ extension Notifier {
             exit(1)
         }
         // Half of this needs a signature; the transition wiring never does, so check that first and
-        // separately — an unsigned build must still be told when a session finishes or asks for something.
+        // separately: an unsigned build must still be told when a session finishes or asks for something.
         let demo = Store(demo: true)
         let base = DemoData.snapshot()
         guard let subject = base.sessions.first(where: { $0.state == .running }) else {
@@ -246,8 +257,8 @@ extension Notifier {
                "Submarine and Glass")
 
         // A session title is whatever someone typed at Claude, so it reaches AppleScript as data or not
-        // at all. This title carries the two things that break an interpolated script — a quote and a
-        // backslash — and a command to run if the quoting ever fails open.
+        // at all. This title carries the two things that break an interpolated script (a
+        // quote and a backslash) and a command to run if the quoting ever fails open.
         let hostile = #"He said "hi" \ then: quit application "Finder""#
         let args = osascriptArguments(title: hostile, subtitle: "Needs you", body: hostile)
         let fragments = args.indices.filter { args[$0] == "-e" && $0 + 1 < args.count }.map { args[$0 + 1] }
@@ -257,7 +268,10 @@ extension Notifier {
                "\(fragments.count) script fragments, \(data.count) arguments after --")
         // Both report what happened rather than what should have: a FAIL whose evidence line reads like
         // a PASS is the same trap in miniature.
-        let posted = postThroughOSAScript(title: "Session Deck self-test", subtitle: "Needs you", body: hostile)
+        let probe = osascriptProcess(title: "Session Deck self-test", subtitle: "Needs you", body: hostile)
+        try? probe.run()
+        probe.waitUntilExit()
+        let posted = probe.terminationStatus == 0
         expect("the borrowed entry posts, hostile text and all", posted,
                posted ? "osascript exited 0" : "osascript would not run the script")
         let gate = [isAway(idleSeconds: 0, screenLocked: false),
