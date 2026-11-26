@@ -24,6 +24,8 @@ struct DeckConfig: Decodable {
     var hotkey: String?
     /// Where closed terminal sessions resume: `"warp"`, `"iterm"` or `"terminal"` (default: the terminal they ran in).
     var terminal: String?
+    /// `false` silences the macOS notifications for finished and needs-you sessions (the menu toggles it too).
+    var notifications: Bool?
 
     static var fileURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

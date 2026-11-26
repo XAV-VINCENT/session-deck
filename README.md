@@ -38,7 +38,7 @@ them all and puts the answer around your notch.
   </tr>
   <tr>
     <td>Running sessions on the left of the camera, sessions waiting for you on the right. Nothing pending: a green check.</td>
-    <td>A session finished or started waiting for you: a banner drops for 6 seconds. Click it to jump in.</td>
+    <td>A session finished or started waiting for you: a banner drops for 6 seconds and a sound plays — <code>Glass</code> for finished, <code>Submarine</code> for waiting. Click it to jump in.</td>
   </tr>
 </table>
 
@@ -144,6 +144,12 @@ wraps it in `Session Deck.app`, signs it ad hoc, installs it in `~/Applications`
 - **First click**: macOS may ask to let Session Deck control Claude (the Apple Event above), and Terminal or
   iTerm2 (to pick the tab). Allow it.
 - **Menu bar managers** (Thaw, Ice, Bartender): drag the Session Deck item out of the hidden section once.
+- **Notification Centre**: `build.sh` signs ad hoc, and the notification daemon will not register an app
+  without a Team ID — `requestAuthorization` answers "Notifications are not allowed for this application",
+  for any bundle id, in any location. So alerts are the notch banner plus a sound, which need no permission
+  and work over full-screen apps and on every Space. Sign the app with a real identity and the same build
+  posts proper notifications instead, click-to-open included: the code is already there and switches on when
+  a Team ID is present. `--selftest-notify` reports which half you have.
 
 ## Configure
 
@@ -175,6 +181,7 @@ wraps it in `Session Deck.app`, signs it ad hoc, installs it in `~/Applications`
 | `hotkey` | `opt+cmd+k` | `ctrl`, `opt`, `shift`, `cmd` plus a letter, digit or `space`; `none` turns it off |
 | `instances.cli` | label `Terminal` | The Terminal card: same `label`, `color` and `hidden` keys |
 | `terminal` | the terminal your last open session ran in | Where closed terminal sessions resume: `warp`, `iterm` or `terminal` |
+| `notifications` | `true` | `false` silences the banner's sound (also in the `⋯` menu) |
 
 `<folder>` is the profile's folder in `~/Library/Application Support`: `Claude`, `Claude-Personal`, and so on.
 The Terminal card's key is `cli`.
@@ -191,6 +198,7 @@ SessionDeck --open <id>               # send one session link to its profile, wi
                                       # (terminal sessions: print what a click would do)
 SessionDeck --login-item on|off|status
 SessionDeck --selftest-notch          # drives the real panel with pointer moves and keys, prints PASS or FAIL
+SessionDeck --selftest-notify         # checks the finished / needs-you alerts (run it from the installed app)
 ```
 
 The binary is `~/Applications/Session Deck.app/Contents/MacOS/SessionDeck`. Every click is logged with the

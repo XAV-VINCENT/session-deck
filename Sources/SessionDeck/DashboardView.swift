@@ -421,6 +421,7 @@ private struct SettingsMenu: View {
     var body: some View {
         Menu {
             Toggle("Show sessions idle over \(store.recentDays) days", isOn: $store.showOlder)
+            Toggle("Notify when a session finishes or needs you", isOn: $store.notifies)
             Toggle("Open at login", isOn: Binding(
                 get: { launchAtLogin },
                 set: { launchAtLogin = LoginItem.set($0) }

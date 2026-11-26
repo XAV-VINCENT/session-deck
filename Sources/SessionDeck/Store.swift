@@ -9,6 +9,10 @@ final class Store: ObservableObject {
     @Published var showOlder = UserDefaults.standard.bool(forKey: "showOlder") {
         didSet { if !isDemo { UserDefaults.standard.set(showOlder, forKey: "showOlder") } }
     }
+    /// Notify on the same two transitions the notch banner shows. On unless config.json or the menu says no.
+    @Published var notifies = UserDefaults.standard.object(forKey: "notifies") as? Bool ?? true {
+        didSet { if !isDemo { UserDefaults.standard.set(notifies, forKey: "notifies") } }
+    }
 
     /// Made-up profiles and sessions (`--demo`, README pictures): nothing on disk is read.
     let isDemo: Bool
@@ -41,7 +45,7 @@ final class Store: ObservableObject {
     }
 
     /// A session left `running`, or newly needs the user.
-    var onTransition: ((Session) -> Void)?
+    var onTransition: ((Session, Notifier.Kind) -> Void)?
 
     private(set) var config = DeckConfig.load() {
         didSet { TerminalLauncher.preferred = config.terminal }
@@ -88,13 +92,27 @@ final class Store: ObservableObject {
         }
     }
 
+    /// `--selftest-notify` drives the real transition test with two snapshots, so the path from a state
+    /// change to a banner and a sound is checked without waiting for a session on disk to move.
+    func replay(_ before: Snapshot, _ after: Snapshot) {
+        snapshot = before
+        previousStates = Dictionary(before.sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
+        publish(after)
+    }
+
     private func publish(_ next: Snapshot) {
         let firstScan = snapshot.scannedAt == .distantPast
         for session in next.sessions where !firstScan {
             let before = previousStates[session.id]
             let leftRunning = before == .running && session.state != .running
             let newlyNeedsYou = before != nil && before != .needsYou && session.state == .needsYou
-            if leftRunning || newlyNeedsYou { onTransition?(session) }
+            // Needs-you wins when a run ends on a question, which is the common case: the banner and the
+            // notification should both say what is wanted, not that something stopped.
+            if newlyNeedsYou {
+                onTransition?(session, .needsYou)
+            } else if leftRunning {
+                onTransition?(session, .finished)
+            }
         }
         previousStates = Dictionary(next.sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
         // An unchanged scan redraws nothing, except every 30 s so "3m ago" keeps moving.
