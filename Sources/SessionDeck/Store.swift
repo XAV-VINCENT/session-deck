@@ -54,6 +54,11 @@ final class Store: ObservableObject {
     private var parsed: [String: (modified: Date, session: RawSession?)] = [:]
     private let cli = CLIScanner()
     private var previousStates: [String: SessionState] = [:]
+    /// A run that ends on a question arrives as **two** scans, not one: the run stops, and the question
+    /// appears on the next pass two seconds later. Alerting on the first gives two sounds for one event
+    /// — measured once in fifteen transitions on 2026-11-26. So a finish waits one scan to see whether a
+    /// question follows it, and a question never waits, because it is the one that actually wants you.
+    private var finishHeld: Set<String> = []
     private var timer: Timer?
     private var scanning = false
 
@@ -92,12 +97,15 @@ final class Store: ObservableObject {
         }
     }
 
-    /// `--selftest-notify` drives the real transition test with two snapshots, so the path from a state
-    /// change to a banner and a sound is checked without waiting for a session on disk to move.
-    func replay(_ before: Snapshot, _ after: Snapshot) {
-        snapshot = before
-        previousStates = Dictionary(before.sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
-        publish(after)
+    /// `--selftest-notify` drives the real transition test with a sequence of snapshots, so the path from
+    /// a state change to a banner and a sound is checked without waiting for a session on disk to move.
+    /// Three are needed to see the held finish resolve, since the hold lasts exactly one scan.
+    func replay(_ snapshots: [Snapshot]) {
+        guard let first = snapshots.first else { return }
+        snapshot = first
+        previousStates = Dictionary(first.sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
+        finishHeld = []
+        for next in snapshots.dropFirst() { publish(next) }
     }
 
     private func publish(_ next: Snapshot) {
@@ -109,11 +117,18 @@ final class Store: ObservableObject {
             // Needs-you wins when a run ends on a question, which is the common case: the banner and the
             // notification should both say what is wanted, not that something stopped.
             if newlyNeedsYou {
+                // The finish this question followed is the same event, so it never gets its own alert.
+                finishHeld.remove(session.id)
                 onTransition?(session, .needsYou)
             } else if leftRunning {
+                finishHeld.insert(session.id)
+            } else if finishHeld.remove(session.id) != nil, session.state != .running {
+                // A whole scan passed with no question and no restart, so the run really did just end.
                 onTransition?(session, .finished)
             }
         }
+        // A session that vanishes between scans never earns the alert it was holding.
+        finishHeld.formIntersection(next.sessions.map(\.id))
         previousStates = Dictionary(next.sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
         // An unchanged scan redraws nothing, except every 30 s so "3m ago" keeps moving.
         let unchanged = next.sessions == snapshot.sessions && next.instances == snapshot.instances

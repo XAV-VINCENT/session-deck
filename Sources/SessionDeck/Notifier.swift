@@ -160,18 +160,21 @@ extension Notifier {
         }
         var seen: [(String, Kind)] = []
         demo.onTransition = { session, kind in seen.append((session.id, kind)) }
-        demo.replay(snapshot(.running), snapshot(.done))
-        expect("a session that stops running is reported as finished",
-               seen.count == 1 && seen.first?.0 == subject.id && seen.first?.1 == .finished,
-               seen.map { "\($0.1.suffix)" }.joined(separator: ",") )
-        seen = []
-        demo.replay(snapshot(.running), snapshot(.needsYou))
-        expect("a session that starts waiting is reported as needs-you",
-               seen.count == 1 && seen.first?.1 == .needsYou,
-               seen.map { "\($0.1.suffix)" }.joined(separator: ","))
-        seen = []
-        demo.replay(snapshot(.idle), snapshot(.idle))
-        expect("a session that did not move reports nothing", seen.isEmpty, "\(seen.count) fired")
+        // One state per scan, so a hold that lasts a scan is visible. The alerts come back as the
+        // strings a reader can check against the state sequence: "needs-you", "finished", or none.
+        func check(_ label: String, _ states: [SessionState], _ want: String) {
+            seen = []
+            demo.replay(states.map(snapshot))
+            let got = seen.map { $0.1.suffix }.joined(separator: ",")
+            let mine = seen.allSatisfy { $0.0 == subject.id }
+            expect(label, got == want && mine, got.isEmpty ? "nothing fired" : got)
+        }
+        check("a run that ends reports finished, one scan later", [.running, .done, .done], "finished")
+        // The regression: these two arrive on separate scans, and alerting on each gave two sounds.
+        check("a run that ends on a question reports only needs-you", [.running, .done, .needsYou], "needs-you")
+        check("a question is never held back", [.running, .needsYou], "needs-you")
+        check("a run that pauses and resumes reports nothing", [.running, .done, .running], "")
+        check("a session that did not move reports nothing", [.idle, .idle], "")
         expect("both alert sounds exist",
                NSSound(named: "Submarine") != nil && NSSound(named: "Glass") != nil,
                "Submarine and Glass")
