@@ -57,6 +57,23 @@ final class DeckViewState: ObservableObject {
     }
 }
 
+/// The deck's own height, summed from its parts: the title bar, the filters, the hairlines, the list at its
+/// natural height and the footer. The notch island follows it so the shape is as tall as the sessions in it.
+struct DeckHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value += nextValue() }
+}
+
+extension View {
+    /// Adds this view's laid-out height to the deck's. Measuring beats arithmetic here: a row is one or two
+    /// lines depending on its detail text, and the title bar is as tall as this Mac's notch.
+    func addingToDeckHeight() -> some View {
+        background(GeometryReader { proxy in
+            Color.clear.preference(key: DeckHeightKey.self, value: proxy.size.height)
+        })
+    }
+}
+
 struct DeckActions {
     var open: (Session) -> Void
     var bringToFront: (Instance) -> Void
@@ -163,14 +180,17 @@ struct DashboardView: View {
     let actions: DeckActions
     /// In the notch the title bar shares the menu bar row, on both sides of the camera.
     var notchSize: CGSize?
+    /// Called with the height the deck wants, as the list changes. The notch island follows it; the popover
+    /// and the renderers leave it nil and set a frame of their own.
+    var onNaturalHeight: ((CGFloat) -> Void)?
     @FocusState private var searchFocused: Bool
 
     var body: some View {
         let layout = DeckLayout(store: store, viewState: viewState)
         VStack(spacing: 0) {
-            titleBar
-            tiles
-            Rectangle().fill(Theme.hairline).frame(height: 1)
+            titleBar.addingToDeckHeight()
+            tiles.addingToDeckHeight()
+            Rectangle().fill(Theme.hairline).frame(height: 1).addingToDeckHeight()
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
@@ -188,18 +208,22 @@ struct DashboardView: View {
                         }
                     }
                     .padding(10)
+                    .addingToDeckHeight()
                 }
                 .onChange(of: viewState.selectedId) { _, id in
                     guard let id else { return }
                     withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id) }
                 }
             }
-            Rectangle().fill(Theme.hairline).frame(height: 1)
-            footer
+            Rectangle().fill(Theme.hairline).frame(height: 1).addingToDeckHeight()
+            footer.addingToDeckHeight()
         }
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)
         .onChange(of: viewState.focusToken) { _, _ in searchFocused = true }
+        .onPreferenceChange(DeckHeightKey.self) { height in
+            onNaturalHeight?(height)
+        }
     }
 
     private var titleBar: some View {
@@ -397,6 +421,9 @@ private struct SettingsMenu: View {
     var body: some View {
         Menu {
             Toggle("Show sessions idle over \(store.recentDays) days", isOn: $store.showOlder)
+            Toggle("Notify when a session finishes or needs you", isOn: $store.notifies)
+                // config.json outranks the toggle, so do not offer a switch that cannot move.
+                .disabled(store.config.notifications != nil)
             Toggle("Open at login", isOn: Binding(
                 get: { launchAtLogin },
                 set: { launchAtLogin = LoginItem.set($0) }

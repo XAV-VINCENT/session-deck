@@ -37,6 +37,9 @@ enum SessionDeckMain {
         if args.contains("--selftest-notch") {
             NotchController.runSelfTest()
         }
+        if args.contains("--selftest-notify") {
+            Notifier.runSelfTest()
+        }
         let app = NSApplication.shared
         let delegate = AppDelegate(demo: args.contains("--demo"))
         Self.delegate = delegate
@@ -149,7 +152,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if store.config.notch != false {
             notch = NotchController(store: store, viewState: viewState, actions: actions)
         }
-        store.onTransition = { [weak self] session in self?.notch?.peek(session) }
+        store.onTransition = { [weak self] session, kind in
+            guard let self else { return }
+            self.notch?.peek(session)
+            guard self.store.alertsOn else { return }
+            let did = Notifier.post(session, instance: self.store.snapshot.instance(session.instanceId), kind: kind)
+            deckLog("\(kind.suffix): \(session.title) (banner + \(did))")
+        }
+        Notifier.start { [weak self] id in
+            guard let self, let session = self.store.snapshot.sessions.first(where: { $0.id == id }) else { return }
+            self.open(session)
+        }
         store.onConfigReload = { [weak self] in self?.registerHotKey() }
         store.objectWillChange
             .receive(on: RunLoop.main)

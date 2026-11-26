@@ -16,8 +16,17 @@ final class NotchModel: ObservableObject {
     @Published var deckMounted = false
 
     static let wing: CGFloat = 40
+    /// The deck's width, and the tallest the island may get. Its height follows the list: `expandedHeight`.
     static let expandedSize = CGSize(width: 680, height: 620)
+    /// Title bar, filters and footer come to about 180pt, so under this there is no list left to shorten.
+    static let minExpandedHeight: CGFloat = 220
     static let peekSize = CGSize(width: 500, height: 74)
+
+    /// How tall the open island is right now: what the list measured, clamped. The panel keeps its full size,
+    /// so a shorter deck moves the shape only, never the window.
+    @Published var expandedHeight: CGFloat = NotchModel.expandedSize.height
+    /// What the list last asked for, before clamping, so a capped deck can be told from a short one.
+    @Published private(set) var naturalHeight: CGFloat = NotchModel.expandedSize.height
 
     var collapsedSize: CGSize {
         CGSize(width: notchSize.width + Self.wing * 2, height: notchSize.height)
@@ -27,8 +36,17 @@ final class NotchModel: ObservableObject {
         switch mode {
         case .collapsed: return collapsedSize
         case .peek: return CGSize(width: max(collapsedSize.width, Self.peekSize.width), height: notchSize.height + Self.peekSize.height)
-        case .expanded: return Self.expandedSize
+        case .expanded: return CGSize(width: Self.expandedSize.width, height: expandedHeight)
         }
+    }
+
+    /// The deck measured itself. Clamped both ways, and ignored when it barely moved, so sub-pixel
+    /// relayout noise never starts an animation.
+    func setExpandedHeight(_ height: CGFloat) {
+        naturalHeight = height
+        let clamped = min(max(height, Self.minExpandedHeight), Self.expandedSize.height)
+        guard abs(clamped - expandedHeight) > 0.5 else { return }
+        expandedHeight = clamped
     }
 
     var cornerRadius: CGFloat {
@@ -45,6 +63,8 @@ enum NotchMotion {
     static let open = Animation.spring(response: 0.3, dampingFraction: 0.8)
     static let close = Animation.spring(response: 0.24, dampingFraction: 0.92)
     static let peek = Animation.spring(response: 0.34, dampingFraction: 0.74)
+    /// The island growing or shrinking while it is open: a filter, or a session arriving or leaving.
+    static let resize = Animation.spring(response: 0.28, dampingFraction: 0.9)
     /// Pointer on the notch this long opens the deck (filters out a cursor just passing through).
     static let hoverDelay = 0.03
     static let leaveDelay = 0.3
@@ -165,10 +185,17 @@ final class NotchController {
         collapse()
     }
 
+    /// The tallest the island has been since this opening. The hover area holds that height until the
+    /// deck closes, because the list can shrink while the pointer rests on a lower row: an area that
+    /// shrank with it would read the pointer as outside and collapse the deck under them on the next
+    /// small move. Growing is fine to follow; shrinking is not.
+    private var hotFloor: CGFloat = 0
+
     /// The black shape on screen (it grows with the mode), plus the screen's top edge.
     private var hotRect: NSRect {
         guard let screen else { return .zero }
-        let size = model.size
+        var size = model.size
+        if model.mode != .collapsed { size.height = max(size.height, hotFloor) }
         return NSRect(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - size.height, width: size.width, height: size.height + 2)
     }
 
@@ -197,6 +224,7 @@ final class NotchController {
 
     private func pointerMoved(to point: NSPoint) {
         lastPointer = point
+        if model.mode != .collapsed { hotFloor = max(hotFloor, model.size.height) }
         mountDeck(approachRect.contains(point))
         let inside = hotRect.contains(point)
         panel.ignoresMouseEvents = !(inside && model.mode != .collapsed)
@@ -231,6 +259,7 @@ final class NotchController {
 
     private func expand() {
         withAnimation(NotchMotion.open) { model.mode = .expanded }
+        hotFloor = max(hotFloor, model.size.height)
         panel.ignoresMouseEvents = !hotRect.contains(lastPointer) && !openedByKeyboard
     }
 
@@ -238,6 +267,7 @@ final class NotchController {
         collapseWork?.cancel()
         defer { mountDeck(approachRect.contains(lastPointer)) }
         openedByKeyboard = false
+        hotFloor = 0
         viewState.selectedId = nil
         withAnimation(NotchMotion.close) { model.mode = .collapsed }
         panel.ignoresMouseEvents = true
@@ -307,8 +337,11 @@ struct NotchRootView: View {
         let open = model.mode == .expanded
         return ZStack(alignment: .top) {
             if model.deckMounted || open {
-                DashboardView(store: store, viewState: viewState, actions: actions, notchSize: model.notchSize)
-                    .frame(width: NotchModel.expandedSize.width, height: NotchModel.expandedSize.height)
+                DashboardView(store: store, viewState: viewState, actions: actions, notchSize: model.notchSize,
+                              onNaturalHeight: { height in
+                                  withAnimation(NotchMotion.resize) { model.setExpandedHeight(height) }
+                              })
+                    .frame(width: NotchModel.expandedSize.width, height: model.expandedHeight)
                     .opacity(open ? 1 : 0)
                     .scaleEffect(open ? 1 : 0.97, anchor: .top)
                     .animation(open ? .easeOut(duration: 0.16) : .easeIn(duration: 0.1), value: open)
@@ -460,6 +493,7 @@ extension NotchController {
         expect("live pulse draws and pulses", inked(pulse) > 50 && pulse.isPulsing, "\(inked(pulse)) px")
 
         let firstRow = DeckLayout(store: store, viewState: viewState).rows.first
+        var tallest: CGFloat = 0
         let steps: [(Double, () -> Void)] = [
             (0.3, {
                 frame("collapsed at start", open: false)
@@ -504,6 +538,64 @@ extension NotchController {
             (1.0, {
                 frame("opening collapses", open: false)
                 controller.toggleFromKeyboard()
+            }),
+            // The island is only as tall as the list. Every demo filter still overflows the cap, so the
+            // short case is a search that leaves one session; the panel behind it must not move either way.
+            (0.8, {
+                viewState.filter = .all
+                viewState.query = ""
+            }),
+            (0.8, {
+                tallest = controller.model.naturalHeight
+                viewState.query = "flaky"
+            }),
+            (0.8, {
+                let shortest = controller.model.expandedHeight
+                let panelUnmoved = abs(controller.panel.frame.height - panelSize.height) < 1
+                expect("the island is as tall as the list, no taller",
+                       shortest < NotchModel.expandedSize.height - 100
+                           && shortest >= NotchModel.minExpandedHeight
+                           && abs(shortest - controller.model.naturalHeight) < 1
+                           && panelUnmoved,
+                       String(format: "%.0f pt for one session, %.0f pt asked for by all 19 (capped at %.0f), panel %@",
+                              shortest, tallest, NotchModel.expandedSize.height, panelUnmoved ? "unchanged" : "RESIZED"))
+                viewState.query = ""
+            }),
+            // The list shrinking must not pull the hover area out from under the pointer. This needs a
+            // deck opened by HOVER: one opened by the shortcut ignores the pointer leaving altogether
+            // (see hoverChanged), so these same steps would pass there without proving anything.
+            // collapse() rather than Escape: the steps above leave the search field focused, which eats
+            // the key, and the deck would stay open BY KEYBOARD. The first version of this test did
+            // exactly that and passed with the fix reverted.
+            (0.5, { controller.collapse() }),
+            (0.5, {
+                expect("the deck is shut before the shrink case, so the reopen is a hover",
+                       controller.model.mode == .collapsed, "\(controller.model.mode)")
+                viewState.filter = .all
+                viewState.query = ""
+                controller.pointerMoved(to: top)
+            }),
+            (0.5, {
+                expect("hover reopens the deck for the shrink case", controller.model.mode == .expanded,
+                       "\(controller.model.mode)")
+                controller.pointerMoved(to: insideDeck)
+            }),
+            (0.5, { viewState.query = "flaky" }),
+            (1.2, {
+                // The shrink travels through a SwiftUI layout pass, so it is not in place immediately.
+                // An earlier version of this moved the pointer 0.5 s after the query and passed with the
+                // fix reverted, because the island was still 620 pt and the scenario never happened. So
+                // the premise is asserted here, at the moment of the move, not at the end.
+                let depth = screen.frame.maxY - insideDeck.y
+                expect("the island shrank above the pointer before it moved",
+                       controller.model.expandedHeight < depth,
+                       String(format: "island %.0f pt, pointer %.0f pt down", controller.model.expandedHeight, depth))
+                controller.pointerMoved(to: NSPoint(x: insideDeck.x, y: insideDeck.y - 1))
+            }),
+            (0.8, {
+                expect("the list shrinking does not close the deck under the pointer",
+                       controller.model.mode == .expanded, "\(controller.model.mode)")
+                viewState.query = ""
             }),
             (0.8, {
                 viewState.query = "" // the focused search field catches whatever is typed on this Mac meanwhile

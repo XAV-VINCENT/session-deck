@@ -38,7 +38,7 @@ them all and puts the answer around your notch.
   </tr>
   <tr>
     <td>Running sessions on the left of the camera, sessions waiting for you on the right. Nothing pending: a green check.</td>
-    <td>A session finished or started waiting for you: a banner drops for 6 seconds. Click it to jump in.</td>
+    <td>A session finished or started waiting for you: a banner drops for 6 seconds. Click it to jump in. Turn alerts on and it is joined by a sound: <code>Glass</code> for finished, <code>Submarine</code> for waiting.</td>
   </tr>
 </table>
 
@@ -138,12 +138,21 @@ cd session-deck
 ```
 
 Needs macOS 14 or later and the Xcode command line tools (Swift 5.9+). The script builds a release binary,
-wraps it in `Session Deck.app`, signs it ad hoc, installs it in `~/Applications` and starts it.
+wraps it in `Session Deck.app`, signs it, installs it in `~/Applications` and starts it. It signs with a
+real identity when this Mac has one and ad hoc when it does not, which decides whether you get Notification
+Centre entries or the banner below.
 
 - **Open at login**: in the deck's `⋯` menu, or `--login-item on`.
 - **First click**: macOS may ask to let Session Deck control Claude (the Apple Event above), and Terminal or
   iTerm2 (to pick the tab). Allow it.
 - **Menu bar managers** (Thaw, Ice, Bartender): drag the Session Deck item out of the hidden section once.
+- **Notification Centre**: alerts are off by default; turn them on in the `⋯` menu. An ad-hoc signature
+  has no Team Identifier, which the daemon requires, so this build posts no entries of its own. Alerts
+  are then the notch banner and a sound, plus one borrowed through
+  Apple-signed `osascript` when the screen is locked or you have been away a minute; clicking that one
+  will not open the session. Sign the app and `build.sh` uses the identity, enabling its own entries.
+  A free Apple ID supplies a certificate: Xcode ▸ Settings ▸ Accounts ▸ **+** ▸ Apple ID, then
+  **Manage Certificates…** ▸ **+** ▸ **Apple Development**. `--selftest-notify` says which half you have.
 
 ## Configure
 
@@ -175,6 +184,7 @@ wraps it in `Session Deck.app`, signs it ad hoc, installs it in `~/Applications`
 | `hotkey` | `opt+cmd+k` | `ctrl`, `opt`, `shift`, `cmd` plus a letter, digit or `space`; `none` turns it off |
 | `instances.cli` | label `Terminal` | The Terminal card: same `label`, `color` and `hidden` keys |
 | `terminal` | the terminal your last open session ran in | Where closed terminal sessions resume: `warp`, `iterm` or `terminal` |
+| `notifications` | `false` | `true` turns the sound and notifications on (also in the `⋯` menu) |
 
 `<folder>` is the profile's folder in `~/Library/Application Support`: `Claude`, `Claude-Personal`, and so on.
 The Terminal card's key is `cli`.
@@ -191,6 +201,7 @@ SessionDeck --open <id>               # send one session link to its profile, wi
                                       # (terminal sessions: print what a click would do)
 SessionDeck --login-item on|off|status
 SessionDeck --selftest-notch          # drives the real panel with pointer moves and keys, prints PASS or FAIL
+SessionDeck --selftest-notify         # checks the finished / needs-you alerts (run it from the installed app)
 ```
 
 The binary is `~/Applications/Session Deck.app/Contents/MacOS/SessionDeck`. Every click is logged with the
@@ -202,6 +213,9 @@ process it went to in `~/Library/Logs/SessionDeck.log`.
   config and log is the Warp tab config above, when you resume a terminal session in Warp.
 - The pictures and the animation in this README come from `--render-assets` and `--render-animation`, which
   draw the real views with made-up data, so none of your sessions ever ends up in an image.
+- An alert carries the session's title, its project and its status detail or wrap-up summary, so those
+  reach Notification Centre, and a borrowed entry passes through `osascript` on the way. Alerts are off
+  until you ask for them, so none of that leaves the app unless you turn them on.
 
 ## Caveats
 
