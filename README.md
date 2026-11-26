@@ -158,7 +158,9 @@ Centre entries or the banner below.
   will post on an unsigned app's behalf — and that entry waits in Notification Centre until you come back.
   It is attributed to Script Editor and does nothing when clicked, which is why it stands in for the banner
   rather than replacing it, and why it is not posted while you are at the desk: the banner already said it,
-  and two at once is noise. Session text reaches AppleScript through `argv`, never the script source;
+  and two at once is noise. Seen end to end on 2026-11-26: a run ended while the desk was empty and the
+  log read `finished: ... — banner + sound + borrowed entry`, the last clause being `osascript`'s own exit
+  status rather than an assumption. Session text reaches AppleScript through `argv`, never the script source;
   interpolating a title into the script is a syntax error the first time one contains a quote, and worse
   the first time one is written to be.
 
